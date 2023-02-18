@@ -1,6 +1,6 @@
-use std::mem;
-
 use crate::parser::{self, Memory, ParseResult};
+
+type NameFn = Box<dyn Fn(&InstructionParams) -> String>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ImmediateValueSpecification {
@@ -66,12 +66,12 @@ impl InstructionSpecification {
         let immediate_value_parser =
             immediate_value_type.map(|ivt| parser::immediate_value_parser(ivt));
 
-        println!("Parse instruction");
-        println!(
-            "   prefix_parser={:}, ivp={:}",
-            prefix_parser.is_some(),
-            immediate_value_parser.is_some()
-        );
+        // println!("Parse instruction");
+        // println!(
+        //     "   prefix_parser={:}, ivp={:}",
+        //     prefix_parser.is_some(),
+        //     immediate_value_parser.is_some()
+        // );
 
         move |memory, index| {
             // If there's a prefix, parse it.
@@ -85,8 +85,8 @@ impl InstructionSpecification {
                 None => index,
             };
             // Same for opcode, but it always exists.
-            println!("  Index before opcode_parser={:}", index);
-            println!("  Memory at index={:X?}", memory[index]);
+            // println!("  Index before opcode_parser={:}", index);
+            // println!("  Memory at index={:X?}", memory[index]);
             let index = match opcode_parser(memory, index) {
                 Ok((index, _)) => index,
                 Err(e) => return Err(e),
@@ -109,6 +109,42 @@ impl InstructionSpecification {
             Ok((index, self.build(params)))
         }
     }
+}
+
+// Instruction name helpers -- Require a specific type of immediate value.
+// If I was smarter I would just make Instruction generic on ImmediateValue type, but it was too hard.
+
+/// Takes a format string, and replaces every instance of {} with the Instruction's u8 ImmediateValue
+fn name_u8(format_string: String) -> NameFn {
+    Box::new(move |params| match &params.immediate_value {
+        Some(immediate_value) => match immediate_value {
+            ImmediateValue::U8(u8) => format_string.replace("{}", &u8.to_string()),
+            _ => String::from("Error: Incorrect immediate value. Should be u16."),
+        },
+        None => String::from("Error: No immediate value. Should be u16"),
+    })
+}
+
+/// Takes a format string, and replaces every instance of {} with the Instruction's i8 ImmediateValue
+fn name_i8(format_string: String) -> NameFn {
+    Box::new(move |params| match &params.immediate_value {
+        Some(immediate_value) => match immediate_value {
+            ImmediateValue::I8(i8) => format_string.replace("{}", &i8.to_string()),
+            _ => String::from("Error: Incorrect immediate value. Should be u16."),
+        },
+        None => String::from("Error: No immediate value. Should be u16"),
+    })
+}
+
+/// Takes a format string, and replaces every instance of {} with the Instruction's u16 ImmediateValue
+fn name_u16(format_string: String) -> NameFn {
+    Box::new(move |params| match &params.immediate_value {
+        Some(immediate_value) => match immediate_value {
+            ImmediateValue::U16(u16) => format_string.replace("{}", &u16.to_string()),
+            _ => String::from("Error: Incorrect immediate value. Should be u16."),
+        },
+        None => String::from("Error: No immediate value. Should be u16"),
+    })
 }
 
 // Instruction functions
@@ -136,13 +172,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
             execute: noop,
         },
         InstructionSpecification {
-            name: Box::new(|params| match &params.immediate_value {
-                Some(immediate_value) => match immediate_value {
-                    ImmediateValue::U16(u16) => format!("LD SP,${:x}", u16),
-                    _ => String::from("Error: Incorrect immediate value. Should be u16."),
-                },
-                None => String::from("Error: No immediate value. Should be u16"),
-            }),
+            name: name_u16(String::from("LD SP,${}")),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x31,

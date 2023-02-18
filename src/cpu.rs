@@ -10,6 +10,6 @@ pub fn read_instruction(
     memory: Memory,
     index: usize,
 ) -> Result<(usize, Instruction), String> {
-    println!("Read instruction");
+    // println!("Read instruction");
     parser::any_instruction(instruction_specs)(memory, index)
 }

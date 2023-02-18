@@ -19,27 +19,25 @@ pub fn byte(byte: u8) -> impl Fn(Memory<'_>, usize) -> ParseResult<()> {
 }
 
 /// Read a single byte from memory, parsing it as u8
-pub fn any_u8() -> impl Fn(Memory<'_>, usize) -> ParseResult<u8> {
-    move |memory, index| Ok((index + 1, memory[index]))
+pub fn any_u8(memory: Memory<'_>, index: usize) -> ParseResult<u8> {
+    Ok((index + 1, memory[index]))
 }
 
 /// Read a single byte from memory, parsing it as i8
-pub fn any_i8() -> impl Fn(Memory<'_>, usize) -> ParseResult<i8> {
+pub fn any_i8(_memory: Memory<'_>, _index: usize) -> ParseResult<i8> {
     // I'm not sure whether the GB stores i8 in the same way as rust expects.
-    move |memory, index| unimplemented!()
+    unimplemented!()
 }
 
 /// Read a single word from memory, parsing it as u16
-pub fn any_u16() -> impl Fn(Memory<'_>, usize) -> ParseResult<u16> {
-    move |memory, index| {
-        // GB stores u16 as [lower_byte, higher_byte], but each byte is in normal order.
-        // Don't know why.
-        let lower_byte: u8 = memory[index];
-        let higher_byte: u8 = memory[index + 1];
-        let word: u16 = ((higher_byte as u16) << 8) | lower_byte as u16;
+pub fn any_u16(memory: Memory<'_>, index: usize) -> ParseResult<u16> {
+    // GB stores u16 as [lower_byte, higher_byte], but each byte is in normal order.
+    // Don't know why.
+    let lower_byte: u8 = memory[index];
+    let higher_byte: u8 = memory[index + 1];
+    let word: u16 = ((higher_byte as u16) << 8) | lower_byte as u16;
 
-        Ok((index + 1, word))
-    }
+    Ok((index + 1, word))
 }
 
 /// Returns the first successful parse using the given parsers
@@ -49,7 +47,7 @@ pub fn any_instruction(
     move |memory, index| {
         let mut errors = String::new();
         for spec in specs.iter() {
-            println!("Any -- spec.params={:X?}", spec.params);
+            // println!("Any -- spec.params={:X?}", spec.params);
             let result = spec.parse_instruction()(memory, index);
             match result {
                 Ok(_) => return result,
@@ -67,15 +65,15 @@ pub fn immediate_value_parser(
         match immediate_value_type {
             // Turn the parse results into ImmediateValue's. This is just janky function composition.
             ImmediateValueSpecification::U8 => {
-                let (index, u8) = any_u8()(memory, index)?;
+                let (index, u8) = any_u8(memory, index)?;
                 Ok((index, ImmediateValue::U8(u8)))
             }
             ImmediateValueSpecification::I8 => {
-                let (index, i8) = any_i8()(memory, index)?;
+                let (index, i8) = any_i8(memory, index)?;
                 Ok((index, ImmediateValue::I8(i8)))
             }
             ImmediateValueSpecification::U16 => {
-                let (index, u16) = any_u16()(memory, index)?;
+                let (index, u16) = any_u16(memory, index)?;
                 Ok((index, ImmediateValue::U16(u16)))
             }
         }
