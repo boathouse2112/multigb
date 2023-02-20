@@ -24,9 +24,9 @@ pub fn any_u8(memory: Memory<'_>, index: usize) -> ParseResult<u8> {
 }
 
 /// Read a single byte from memory, parsing it as i8
-pub fn any_i8(_memory: Memory<'_>, _index: usize) -> ParseResult<i8> {
-    // I'm not sure whether the GB stores i8 in the same way as rust expects.
-    unimplemented!()
+pub fn any_i8(memory: Memory<'_>, index: usize) -> ParseResult<i8> {
+    // TODO: JZ command results in -5 from 0xFB, which seems right, but the test rom expects something different.
+    Ok((index + 1, memory[index] as i8))
 }
 
 /// Read a single word from memory, parsing it as u16
@@ -37,7 +37,7 @@ pub fn any_u16(memory: Memory<'_>, index: usize) -> ParseResult<u16> {
     let higher_byte: u8 = memory[index + 1];
     let word: u16 = ((higher_byte as u16) << 8) | lower_byte as u16;
 
-    Ok((index + 1, word))
+    Ok((index + 2, word))
 }
 
 /// Returns the first successful parse using the given parsers
