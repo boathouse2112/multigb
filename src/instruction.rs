@@ -1,6 +1,10 @@
-use crate::parser::{self, Memory, ParseResult};
+use crate::{
+    cpu::{Cpu, Flag, Register8Bit},
+    parser::{self, Memory, ParseResult},
+};
 
 type NameFn = Box<dyn Fn(&InstructionParams) -> String>;
+type ExecuteFn = Box<dyn Fn(&Instruction, &mut Cpu)>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ImmediateValueSpecification {
@@ -30,18 +34,18 @@ pub struct InstructionParams {
     pub immediate_value: Option<ImmediateValue>,
 }
 
-pub struct Instruction {
+pub struct Instruction<'a> {
     pub name: String,
     pub timing: u8,
     pub params: InstructionParams,
-    pub execute: fn(&Self) -> (),
+    pub execute: &'a ExecuteFn,
 }
 
 pub struct InstructionSpecification {
     name: NameFn,
     timing: u8,
     pub params: InstructionParamSpecification,
-    execute: fn(&Instruction) -> (),
+    execute: ExecuteFn,
 }
 
 impl InstructionSpecification {
@@ -50,14 +54,14 @@ impl InstructionSpecification {
             name: (self.name)(&params),
             timing: self.timing,
             params,
-            execute: self.execute,
+            execute: &self.execute,
         }
     }
 
     /// Parse an instruction, returning its parameters.
     pub fn parse_instruction<'a>(
         &'a self,
-    ) -> impl Fn(Memory<'a>, usize) -> ParseResult<Instruction> + 'a {
+    ) -> impl Fn(Memory<'a>, usize) -> ParseResult<Instruction> + '_ {
         let InstructionParamSpecification {
             prefix,
             opcode,
@@ -156,7 +160,47 @@ fn name_u16(format_string: String) -> NameFn {
 
 // Instruction functions
 
-fn noop(_: &Instruction) {}
+fn noop() -> ExecuteFn {
+    Box::new(move |_, _| {})
+}
+
+fn add_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
+    Box::new(move |_, cpu| {
+        let (result, carry) = lhs.overflowing_add(rhs);
+        let is_zero = result == 0;
+        let half_carry = ((lhs & 0x0F + rhs & 0x0F) >> 4) == 1;
+        cpu.set_register_8_bit(destination, result);
+        cpu.set_flag(Flag::Z, is_zero);
+        cpu.set_flag(Flag::C, carry);
+        cpu.set_flag(Flag::H, half_carry);
+    })
+}
+
+fn inc_8_bit(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |instruction, cpu| {
+        let value = cpu.get_register_8_bit(register);
+        add_8_bit(value, 1, register)(instruction, cpu)
+    })
+}
+
+fn sub_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
+    Box::new(move |_, cpu| {
+        let (result, carry) = lhs.overflowing_sub(rhs);
+        let is_zero = result == 0;
+        let half_carry = (lhs & 0x0F) < (rhs & 0x0F);
+        cpu.set_register_8_bit(destination, result);
+        cpu.set_flag(Flag::Z, is_zero);
+        cpu.set_flag(Flag::C, carry);
+        cpu.set_flag(Flag::H, half_carry);
+    })
+}
+
+fn dec_8_bit(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |instruction, cpu| {
+        let value = cpu.get_register_8_bit(register);
+        add_8_bit(value, 1, register)(instruction, cpu)
+    })
+}
 
 pub fn instruction_specs() -> Vec<InstructionSpecification> {
     vec![
@@ -168,7 +212,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x00,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("INC BC")),
@@ -178,7 +222,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x03,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("INC B")),
@@ -188,7 +232,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x04,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: inc_8_bit(Register8Bit::B),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC B")),
@@ -198,7 +242,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x05,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: dec_8_bit(Register8Bit::B),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD B,${}")),
@@ -208,7 +252,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x06,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD (${}),SP")),
@@ -218,7 +262,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x08,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC BC")),
@@ -228,7 +272,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0B,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("INC C")),
@@ -238,7 +282,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0C,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC C")),
@@ -248,7 +292,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0D,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD C,${}")),
@@ -258,7 +302,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0E,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD DE,${}")),
@@ -268,7 +312,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x11,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("INC DE")),
@@ -278,7 +322,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x13,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC D")),
@@ -288,7 +332,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x15,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD D,${}")),
@@ -298,7 +342,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x16,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("RLA")),
@@ -308,7 +352,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x17,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_i8(String::from("JR Addr_{}")),
@@ -318,7 +362,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x18,
                 immediate_value_type: Some(ImmediateValueSpecification::I8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,(DE)")),
@@ -328,7 +372,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x1A,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC E")),
@@ -338,7 +382,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x1D,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD E,${}")),
@@ -348,7 +392,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x1E,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_i8(String::from("JR NZ, Addr_{}")),
@@ -358,7 +402,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x20,
                 immediate_value_type: Some(ImmediateValueSpecification::I8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD HL,${}")),
@@ -368,7 +412,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x21,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL+),A")),
@@ -378,7 +422,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x22,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("INC HL")),
@@ -388,7 +432,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x23,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("INC H")),
@@ -398,7 +442,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x24,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_i8(String::from("JR Z, Addr_{}")),
@@ -408,7 +452,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x28,
                 immediate_value_type: Some(ImmediateValueSpecification::I8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD L,${}")),
@@ -418,7 +462,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x2E,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD SP,${}")),
@@ -428,7 +472,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x31,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL-),A")),
@@ -438,7 +482,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x32,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC A")),
@@ -448,7 +492,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x3D,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD A,{}")),
@@ -458,7 +502,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x3E,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD C,A")),
@@ -468,7 +512,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x4F,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD D,A")),
@@ -478,7 +522,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x57,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD H,(HL)")),
@@ -488,7 +532,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x66,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD H,A")),
@@ -498,7 +542,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x67,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL),E")),
@@ -508,7 +552,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x73,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL),A")),
@@ -518,7 +562,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x77,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,E")),
@@ -528,7 +572,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x7B,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,H")),
@@ -538,7 +582,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x7C,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("ADD A,E")),
@@ -548,7 +592,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x83,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("ADC A,B")),
@@ -558,7 +602,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x88,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("ADC A,C")),
@@ -568,7 +612,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x89,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("SUB A,B")),
@@ -578,7 +622,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x90,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("XOR A, A")),
@@ -588,7 +632,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xAF,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("RET NZ")),
@@ -598,7 +642,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xC1,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("PUSH BC")),
@@ -608,7 +652,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xC5,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("RET")),
@@ -618,7 +662,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xC9,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("CALL Z,${}")),
@@ -628,7 +672,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xCC,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("CALL ${}")),
@@ -638,7 +682,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xCD,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("ADC A,${}")),
@@ -648,7 +692,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xCE,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD (FF00+${}),A")),
@@ -658,7 +702,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xE0,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD (FF00+C),A")),
@@ -668,7 +712,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xE2,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("AND A,${}")),
@@ -678,7 +722,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xE6,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD (${}),A")),
@@ -688,7 +732,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xEA,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD A,(FF00 + ${})")),
@@ -698,7 +742,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xF0,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_u8(String::from("CP A,${}")),
@@ -708,7 +752,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0xFE,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("RL C")),
@@ -718,7 +762,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x11,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
         InstructionSpecification {
             name: name_none(String::from("BIT 7,H")),
@@ -728,7 +772,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x7C,
                 immediate_value_type: None,
             },
-            execute: noop,
+            execute: noop(),
         },
     ]
 }

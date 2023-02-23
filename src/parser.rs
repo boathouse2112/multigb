@@ -41,9 +41,9 @@ pub fn any_u16(memory: Memory<'_>, index: usize) -> ParseResult<u16> {
 }
 
 /// Returns the first successful parse using the given parsers
-pub fn any_instruction(
-    specs: &Vec<InstructionSpecification>,
-) -> impl Fn(Memory, usize) -> ParseResult<Instruction> + '_ {
+pub fn any_instruction<'a>(
+    specs: &'a Vec<InstructionSpecification>,
+) -> impl Fn(Memory<'a>, usize) -> ParseResult<Instruction> + '_ {
     move |memory, index| {
         let mut errors = String::new();
         for spec in specs.iter() {

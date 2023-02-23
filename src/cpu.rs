@@ -3,6 +3,7 @@ use crate::{
     parser::{self, Memory},
 };
 
+#[derive(Clone, Copy)]
 pub enum Register8Bit {
     A,
     B,
@@ -14,6 +15,7 @@ pub enum Register8Bit {
     L,
 }
 
+#[derive(Clone, Copy)]
 pub enum Register16Bit {
     AF,
     BC,
@@ -23,6 +25,7 @@ pub enum Register16Bit {
     SP,
 }
 
+#[derive(Clone, Copy)]
 /// Register flags. u8 is the bit-position of the flag in the F register.
 pub enum Flag {
     Z = 7, // Zero flag
@@ -31,6 +34,7 @@ pub enum Flag {
     C = 4, // Carry flag
 }
 
+#[derive(Clone, Copy)]
 struct Registers {
     a: u8,
     b: u8,
@@ -44,11 +48,11 @@ struct Registers {
     sp: u16,
 }
 
-pub struct CPU {
+pub struct Cpu {
     registers: Registers,
 }
 
-impl CPU {
+impl Cpu {
     pub fn get_register_8_bit(&self, register: Register8Bit) -> u8 {
         match register {
             Register8Bit::A => self.registers.a,
@@ -128,11 +132,11 @@ impl CPU {
 }
 
 /// Reads an opcode from memory, starting at the given index.
-pub fn read_instruction(
-    instruction_specs: &Vec<InstructionSpecification>,
-    memory: Memory,
+pub fn read_instruction<'a>(
+    instruction_specs: &'a Vec<InstructionSpecification>,
+    memory: Memory<'a>,
     index: usize,
-) -> Result<(usize, Instruction), String> {
+) -> Result<(usize, Instruction<'a>), String> {
     // println!("Read instruction");
     parser::any_instruction(instruction_specs)(memory, index)
 }
