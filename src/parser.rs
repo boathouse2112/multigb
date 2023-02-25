@@ -5,6 +5,7 @@ use crate::instruction::{
 };
 
 pub type Memory<'a> = &'a Vec<u8>;
+pub type MutMemory<'a> = &'a mut Vec<u8>;
 pub type ParseResult<Output> = Result<(usize, Output), String>;
 
 /// Parse a single, predefined byte

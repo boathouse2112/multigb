@@ -1,10 +1,10 @@
 use crate::{
-    cpu::{Cpu, Flag, Register8Bit},
-    parser::{self, Memory, ParseResult},
+    cpu::{Cpu, Flag, Register16Bit, Register8Bit},
+    parser::{self, Memory, MutMemory, ParseResult},
 };
 
 type NameFn = Box<dyn Fn(&InstructionParams) -> String>;
-type ExecuteFn = Box<dyn Fn(&Instruction, &mut Cpu)>;
+type ExecuteFn = Box<dyn Fn(&Instruction, MutMemory, &mut Cpu)>;
 
 #[derive(Clone, Copy, Debug)]
 pub enum ImmediateValueSpecification {
@@ -13,7 +13,7 @@ pub enum ImmediateValueSpecification {
     U16,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum ImmediateValue {
     U8(u8),
     I8(i8),
@@ -161,11 +161,11 @@ fn name_u16(format_string: String) -> NameFn {
 // Instruction functions
 
 fn noop() -> ExecuteFn {
-    Box::new(move |_, _| {})
+    Box::new(move |_, _, _| {})
 }
 
 fn add_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
-    Box::new(move |_, cpu| {
+    Box::new(move |_, _, cpu| {
         let (result, carry) = lhs.overflowing_add(rhs);
         let is_zero = result == 0;
         let half_carry = ((lhs & 0x0F + rhs & 0x0F) >> 4) == 1;
@@ -177,14 +177,14 @@ fn add_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
 }
 
 fn inc_8_bit(register: Register8Bit) -> ExecuteFn {
-    Box::new(move |instruction, cpu| {
+    Box::new(move |instruction, memory, cpu| {
         let value = cpu.get_register_8_bit(register);
-        add_8_bit(value, 1, register)(instruction, cpu)
+        add_8_bit(value, 1, register)(instruction, memory, cpu)
     })
 }
 
 fn sub_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
-    Box::new(move |_, cpu| {
+    Box::new(move |_, _, cpu| {
         let (result, carry) = lhs.overflowing_sub(rhs);
         let is_zero = result == 0;
         let half_carry = (lhs & 0x0F) < (rhs & 0x0F);
@@ -196,12 +196,118 @@ fn sub_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
 }
 
 fn dec_8_bit(register: Register8Bit) -> ExecuteFn {
-    Box::new(move |instruction, cpu| {
+    Box::new(move |instruction, memory, cpu| {
         let value = cpu.get_register_8_bit(register);
-        add_8_bit(value, 1, register)(instruction, cpu)
+        sub_8_bit(value, 1, register)(instruction, memory, cpu)
     })
 }
 
+fn add_16_bit(lhs: u16, rhs: u16, destination: Register16Bit) -> ExecuteFn {
+    Box::new(move |_, _, cpu| {
+        let (result, carry) = lhs.overflowing_add(rhs);
+        let is_zero = result == 0;
+        let half_carry = ((lhs & 0x00FF + rhs & 0x00FF) >> 8) == 1;
+        cpu.set_register_16_bit(destination, result);
+        cpu.set_flag(Flag::Z, is_zero);
+        cpu.set_flag(Flag::C, carry);
+        cpu.set_flag(Flag::H, half_carry)
+    })
+}
+
+/// Adds the values stored in two u16 registers, and stores the result in the left-hand register.
+fn add_16_bit_registers(lhs: Register16Bit, rhs: Register16Bit) -> ExecuteFn {
+    Box::new(move |instruction, memory, cpu| {
+        let lhs_value = cpu.get_register_16_bit(lhs);
+        let rhs_value = cpu.get_register_16_bit(rhs);
+        add_16_bit(lhs_value, rhs_value, lhs)(instruction, memory, cpu)
+    })
+}
+
+fn inc_16_bit(register: Register16Bit) -> ExecuteFn {
+    Box::new(move |instruction, memory, cpu| {
+        let value = cpu.get_register_16_bit(register);
+        add_16_bit(value, 1, register)(instruction, memory, cpu)
+    })
+}
+
+fn load_value_to_8_bit_register(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |instruction, memory, cpu| {
+        let value = instruction
+            .params
+            .immediate_value
+            .expect("has u8 immediate value");
+        if let ImmediateValue::U8(value) = value {
+            cpu.set_register_8_bit(register, value);
+        } else {
+            panic!("Immediate value must be u8");
+        }
+    })
+}
+
+fn load_value_to_16_bit_register(register: Register16Bit) -> ExecuteFn {
+    Box::new(move |instruction, _, cpu| {
+        let value = instruction
+            .params
+            .immediate_value
+            .expect("has u16 immediate value");
+        if let ImmediateValue::U16(value) = value {
+            cpu.set_register_16_bit(register, value)
+        } else {
+            panic!("Immediate value must be u16");
+        }
+    })
+}
+
+/// Load data from the source register to the memory location stored in the destination register
+fn load_8_bit_register_to_memory_indirect(
+    destination: Register16Bit,
+    source: Register8Bit,
+) -> ExecuteFn {
+    Box::new(move |_, memory, cpu| {
+        let value = cpu.get_register_8_bit(source);
+        let address = cpu.get_register_16_bit(destination);
+        memory[address as usize] = value
+    })
+}
+
+/// Load data from the memory location stored in the source register to the destination register
+fn load_memory_to_8_bit_register_indirect(
+    destination: Register8Bit,
+    source: Register16Bit,
+) -> ExecuteFn {
+    Box::new(move |_, memory, cpu| {
+        let address = cpu.get_register_16_bit(source);
+        let value = memory[address as usize];
+        cpu.set_register_8_bit(destination, value)
+    })
+}
+
+fn load_to_memory_16_bit(address: u16, value: u16) -> ExecuteFn {
+    Box::new(move |_, memory, _| {
+        let higher_8_bits = (value & 0xFF00 >> 4) as u8;
+        let lower_8_bits = value as u8;
+        memory[address as usize] = lower_8_bits;
+        memory[address as usize + 1] = higher_8_bits
+    })
+}
+
+/// Load data from the given register to the memory location specified by the u16 immediate value
+fn load_16_bit_register_to_memory_direct(destination: Register16Bit) -> ExecuteFn {
+    Box::new(move |instruction, memory, cpu| {
+        let value = instruction
+            .params
+            .immediate_value
+            .expect("has u16 immediate value");
+        if let ImmediateValue::U16(value) = value {
+            let address = cpu.get_register_16_bit(destination);
+            load_to_memory_16_bit(address, value)(instruction, memory, cpu)
+        } else {
+            panic!("Immediate value must be u16");
+        }
+    })
+}
+
+// Instruction specs vec
 pub fn instruction_specs() -> Vec<InstructionSpecification> {
     vec![
         InstructionSpecification {
@@ -215,6 +321,26 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
             execute: noop(),
         },
         InstructionSpecification {
+            name: name_u16(String::from("LD BC,(${})")),
+            timing: 12,
+            params: InstructionParamSpecification {
+                prefix: None,
+                opcode: 0x01,
+                immediate_value_type: Some(ImmediateValueSpecification::U16),
+            },
+            execute: load_value_to_16_bit_register(Register16Bit::BC),
+        },
+        InstructionSpecification {
+            name: name_none(String::from("LD (BC),A")),
+            timing: 8,
+            params: InstructionParamSpecification {
+                prefix: None,
+                opcode: 0x02,
+                immediate_value_type: None,
+            },
+            execute: load_8_bit_register_to_memory_indirect(Register16Bit::BC, Register8Bit::A),
+        },
+        InstructionSpecification {
             name: name_none(String::from("INC BC")),
             timing: 8,
             params: InstructionParamSpecification {
@@ -222,7 +348,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x03,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: inc_16_bit(Register16Bit::BC),
         },
         InstructionSpecification {
             name: name_none(String::from("INC B")),
@@ -252,7 +378,17 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x06,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop(),
+            execute: load_value_to_8_bit_register(Register8Bit::B),
+        },
+        InstructionSpecification {
+            name: name_none(String::from("RLCA")),
+            timing: 4,
+            params: InstructionParamSpecification {
+                prefix: None,
+                opcode: 0x07,
+                immediate_value_type: None,
+            },
+            execute: noop(), // TODO
         },
         InstructionSpecification {
             name: name_u16(String::from("LD (${}),SP")),
@@ -262,7 +398,27 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x08,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop(),
+            execute: load_16_bit_register_to_memory_direct(Register16Bit::SP),
+        },
+        InstructionSpecification {
+            name: name_none(String::from("ADD HL,BC")),
+            timing: 8,
+            params: InstructionParamSpecification {
+                prefix: None,
+                opcode: 0x09,
+                immediate_value_type: None,
+            },
+            execute: add_16_bit_registers(Register16Bit::HL, Register16Bit::BC),
+        },
+        InstructionSpecification {
+            name: name_none(String::from("LD A,(BC)")),
+            timing: 8,
+            params: InstructionParamSpecification {
+                prefix: None,
+                opcode: 0x0A,
+                immediate_value_type: None,
+            },
+            execute: load_memory_to_8_bit_register_indirect(Register8Bit::A, Register16Bit::BC),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC BC")),
@@ -282,7 +438,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0C,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: inc_8_bit(Register8Bit::C),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC C")),
@@ -292,7 +448,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0D,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: dec_8_bit(Register8Bit::C),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD C,${}")),
@@ -301,6 +457,16 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 prefix: None,
                 opcode: 0x0E,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
+            },
+            execute: load_value_to_8_bit_register(Register8Bit::C),
+        },
+        InstructionSpecification {
+            name: name_u16(String::from("RRCA")),
+            timing: 4,
+            params: InstructionParamSpecification {
+                prefix: None,
+                opcode: 0x0F,
+                immediate_value_type: None,
             },
             execute: noop(),
         },
