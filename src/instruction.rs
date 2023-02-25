@@ -4,6 +4,7 @@ use crate::{
 };
 
 type NameFn = Box<dyn Fn(&InstructionParams) -> String>;
+type TimingFn = Box<dyn Fn(&Cpu) -> u8>;
 type ExecuteFn = Box<dyn Fn(&Instruction, MutMemory, &mut Cpu)>;
 
 #[derive(Clone, Copy, Debug)]
@@ -36,14 +37,14 @@ pub struct InstructionParams {
 
 pub struct Instruction<'a> {
     pub name: String,
-    pub timing: u8,
+    pub timing: &'a TimingFn,
     pub params: InstructionParams,
     pub execute: &'a ExecuteFn,
 }
 
 pub struct InstructionSpecification {
     name: NameFn,
-    timing: u8,
+    timing: TimingFn,
     pub params: InstructionParamSpecification,
     execute: ExecuteFn,
 }
@@ -52,7 +53,7 @@ impl InstructionSpecification {
     fn build(&self, params: InstructionParams) -> Instruction {
         Instruction {
             name: (self.name)(&params),
-            timing: self.timing,
+            timing: &self.timing,
             params,
             execute: &self.execute,
         }
@@ -158,11 +159,38 @@ fn name_u16(format_string: String) -> NameFn {
     })
 }
 
+// Instruction timing helpers
+fn timing_constant(timing: u8) -> TimingFn {
+    Box::new(move |cpu| timing)
+}
+
+fn timing_branch_if_flag(branch_timing: u8, no_branch_timing: u8, flag: Flag) -> TimingFn {
+    Box::new(move |cpu| {
+        if cpu.get_flag(flag) {
+            branch_timing
+        } else {
+            no_branch_timing
+        }
+    })
+}
+
+fn timing_branch_if_not_flag(branch_timing: u8, no_branch_timing: u8, flag: Flag) -> TimingFn {
+    Box::new(move |cpu| {
+        if !cpu.get_flag(flag) {
+            branch_timing
+        } else {
+            no_branch_timing
+        }
+    })
+}
+
 // Instruction functions
 
 fn noop() -> ExecuteFn {
     Box::new(move |_, _, _| {})
 }
+
+// Arithmetic
 
 fn add_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
     Box::new(move |_, _, cpu| {
@@ -171,8 +199,8 @@ fn add_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
         let half_carry = ((lhs & 0x0F + rhs & 0x0F) >> 4) == 1;
         cpu.set_register_8_bit(destination, result);
         cpu.set_flag(Flag::Z, is_zero);
-        cpu.set_flag(Flag::C, carry);
         cpu.set_flag(Flag::H, half_carry);
+        cpu.set_flag(Flag::C, carry)
     })
 }
 
@@ -190,8 +218,9 @@ fn sub_8_bit(lhs: u8, rhs: u8, destination: Register8Bit) -> ExecuteFn {
         let half_carry = (lhs & 0x0F) < (rhs & 0x0F);
         cpu.set_register_8_bit(destination, result);
         cpu.set_flag(Flag::Z, is_zero);
-        cpu.set_flag(Flag::C, carry);
+        cpu.set_flag(Flag::N, true);
         cpu.set_flag(Flag::H, half_carry);
+        cpu.set_flag(Flag::C, carry)
     })
 }
 
@@ -209,8 +238,8 @@ fn add_16_bit(lhs: u16, rhs: u16, destination: Register16Bit) -> ExecuteFn {
         let half_carry = ((lhs & 0x00FF + rhs & 0x00FF) >> 8) == 1;
         cpu.set_register_16_bit(destination, result);
         cpu.set_flag(Flag::Z, is_zero);
-        cpu.set_flag(Flag::C, carry);
-        cpu.set_flag(Flag::H, half_carry)
+        cpu.set_flag(Flag::H, half_carry);
+        cpu.set_flag(Flag::C, carry)
     })
 }
 
@@ -230,8 +259,30 @@ fn inc_16_bit(register: Register16Bit) -> ExecuteFn {
     })
 }
 
-fn load_value_to_8_bit_register(register: Register8Bit) -> ExecuteFn {
+fn sub_16_bit(lhs: u16, rhs: u16, destination: Register16Bit) -> ExecuteFn {
+    Box::new(move |_, _, cpu| {
+        let (result, carry) = lhs.overflowing_sub(rhs);
+        let is_zero = result == 0;
+        let half_carry = (lhs & 0x00FF) < (rhs & 0x00FF);
+        cpu.set_register_16_bit(destination, result);
+        cpu.set_flag(Flag::Z, is_zero);
+        cpu.set_flag(Flag::N, true);
+        cpu.set_flag(Flag::H, half_carry);
+        cpu.set_flag(Flag::C, carry)
+    })
+}
+
+fn dec_16_bit(register: Register16Bit) -> ExecuteFn {
     Box::new(move |instruction, memory, cpu| {
+        let value = cpu.get_register_16_bit(register);
+        sub_16_bit(value, 1, register)(instruction, memory, cpu)
+    })
+}
+
+// Load
+
+fn load_value_to_8_bit_register(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |instruction, _, cpu| {
         let value = instruction
             .params
             .immediate_value
@@ -259,7 +310,7 @@ fn load_value_to_16_bit_register(register: Register16Bit) -> ExecuteFn {
 }
 
 /// Load data from the source register to the memory location stored in the destination register
-fn load_8_bit_register_to_memory_indirect(
+fn load_8_bit_register_to_memory_at_register(
     destination: Register16Bit,
     source: Register8Bit,
 ) -> ExecuteFn {
@@ -271,7 +322,7 @@ fn load_8_bit_register_to_memory_indirect(
 }
 
 /// Load data from the memory location stored in the source register to the destination register
-fn load_memory_to_8_bit_register_indirect(
+fn load_memory_at_register_to_8_bit_register(
     destination: Register8Bit,
     source: Register16Bit,
 ) -> ExecuteFn {
@@ -292,7 +343,7 @@ fn load_to_memory_16_bit(address: u16, value: u16) -> ExecuteFn {
 }
 
 /// Load data from the given register to the memory location specified by the u16 immediate value
-fn load_16_bit_register_to_memory_direct(destination: Register16Bit) -> ExecuteFn {
+fn load_16_bit_register_to_memory_at_value(destination: Register16Bit) -> ExecuteFn {
     Box::new(move |instruction, memory, cpu| {
         let value = instruction
             .params
@@ -307,12 +358,47 @@ fn load_16_bit_register_to_memory_direct(destination: Register16Bit) -> ExecuteF
     })
 }
 
+// Control
+
+// Add to the PC regiser the i8 immediate value
+fn jump_relative() -> ExecuteFn {
+    Box::new(move |instruction, _, cpu| {
+        let value = instruction
+            .params
+            .immediate_value
+            .expect("has i8 immediate value");
+        if let ImmediateValue::I8(value) = value {
+            let pc = cpu.get_register_16_bit(Register16Bit::PC);
+            let new_pc = ((pc as i32) + (value as i32)) as u16;
+            cpu.set_register_16_bit(Register16Bit::PC, new_pc)
+        } else {
+            panic!("Immediate value must be i8");
+        }
+    })
+}
+
+fn jump_relative_if_flag(flag: Flag) -> ExecuteFn {
+    Box::new(move |instruction, memory, cpu| {
+        if cpu.get_flag(flag) {
+            jump_relative()(instruction, memory, cpu)
+        }
+    })
+}
+
+fn jump_relative_if_not_flag(flag: Flag) -> ExecuteFn {
+    Box::new(move |instruction, memory, cpu| {
+        if !cpu.get_flag(flag) {
+            jump_relative()(instruction, memory, cpu)
+        }
+    })
+}
+
 // Instruction specs vec
 pub fn instruction_specs() -> Vec<InstructionSpecification> {
     vec![
         InstructionSpecification {
             name: name_none(String::from("NOP")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x00,
@@ -322,7 +408,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("LD BC,(${})")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x01,
@@ -332,17 +418,17 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD (BC),A")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x02,
                 immediate_value_type: None,
             },
-            execute: load_8_bit_register_to_memory_indirect(Register16Bit::BC, Register8Bit::A),
+            execute: load_8_bit_register_to_memory_at_register(Register16Bit::BC, Register8Bit::A),
         },
         InstructionSpecification {
             name: name_none(String::from("INC BC")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x03,
@@ -352,7 +438,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("INC B")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x04,
@@ -362,7 +448,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("DEC B")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x05,
@@ -372,7 +458,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("LD B,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x06,
@@ -382,7 +468,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("RLCA")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x07,
@@ -392,17 +478,17 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("LD (${}),SP")),
-            timing: 20,
+            timing: timing_constant(20),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x08,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: load_16_bit_register_to_memory_direct(Register16Bit::SP),
+            execute: load_16_bit_register_to_memory_at_value(Register16Bit::SP),
         },
         InstructionSpecification {
             name: name_none(String::from("ADD HL,BC")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x09,
@@ -412,27 +498,27 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,(BC)")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x0A,
                 immediate_value_type: None,
             },
-            execute: load_memory_to_8_bit_register_indirect(Register8Bit::A, Register16Bit::BC),
+            execute: load_memory_at_register_to_8_bit_register(Register8Bit::A, Register16Bit::BC),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC BC")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x0B,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: dec_16_bit(Register16Bit::BC),
         },
         InstructionSpecification {
             name: name_none(String::from("INC C")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x0C,
@@ -442,7 +528,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("DEC C")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x0D,
@@ -452,7 +538,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("LD C,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x0E,
@@ -462,117 +548,117 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("RRCA")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x0F,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: noop(), // TODO
         },
         InstructionSpecification {
             name: name_u16(String::from("LD DE,${}")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x11,
                 immediate_value_type: Some(ImmediateValueSpecification::U16),
             },
-            execute: noop(),
+            execute: load_value_to_16_bit_register(Register16Bit::DE),
         },
         InstructionSpecification {
             name: name_none(String::from("INC DE")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x13,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: inc_16_bit(Register16Bit::DE),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC D")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x15,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: dec_8_bit(Register8Bit::D),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD D,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x16,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop(),
+            execute: load_value_to_8_bit_register(Register8Bit::D),
         },
         InstructionSpecification {
             name: name_none(String::from("RLA")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x17,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: noop(), // TODO
         },
         InstructionSpecification {
             name: name_i8(String::from("JR Addr_{}")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x18,
                 immediate_value_type: Some(ImmediateValueSpecification::I8),
             },
-            execute: noop(),
+            execute: jump_relative(),
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,(DE)")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x1A,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: load_memory_at_register_to_8_bit_register(Register8Bit::A, Register16Bit::DE),
         },
         InstructionSpecification {
             name: name_none(String::from("DEC E")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x1D,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: dec_8_bit(Register8Bit::E),
         },
         InstructionSpecification {
             name: name_u8(String::from("LD E,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x1E,
                 immediate_value_type: Some(ImmediateValueSpecification::U8),
             },
-            execute: noop(),
+            execute: load_value_to_8_bit_register(Register8Bit::E),
         },
         InstructionSpecification {
             name: name_i8(String::from("JR NZ, Addr_{}")),
-            timing: 8,
+            timing: timing_branch_if_not_flag(12, 8, Flag::Z),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x20,
                 immediate_value_type: Some(ImmediateValueSpecification::I8),
             },
-            execute: noop(),
+            execute: jump_relative_if_not_flag(Flag::Z),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD HL,${}")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x21,
@@ -582,7 +668,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL+),A")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x22,
@@ -592,7 +678,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("INC HL")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x23,
@@ -602,7 +688,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("INC H")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x24,
@@ -612,7 +698,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_i8(String::from("JR Z, Addr_{}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x28,
@@ -622,7 +708,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("LD L,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x2E,
@@ -632,7 +718,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("LD SP,${}")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x31,
@@ -642,7 +728,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL-),A")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x32,
@@ -652,7 +738,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("DEC A")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x3D,
@@ -662,7 +748,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("LD A,{}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x3E,
@@ -672,7 +758,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD C,A")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x4F,
@@ -682,7 +768,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD D,A")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x57,
@@ -692,7 +778,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD H,(HL)")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x66,
@@ -702,7 +788,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD H,A")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x67,
@@ -712,7 +798,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL),E")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x73,
@@ -722,7 +808,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD (HL),A")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x77,
@@ -732,7 +818,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,E")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x7B,
@@ -742,7 +828,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD A,H")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x7C,
@@ -752,7 +838,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("ADD A,E")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x83,
@@ -762,7 +848,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("ADC A,B")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x88,
@@ -772,7 +858,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("ADC A,C")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x89,
@@ -782,7 +868,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("SUB A,B")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0x90,
@@ -792,7 +878,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("XOR A, A")),
-            timing: 4,
+            timing: timing_constant(4),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xAF,
@@ -802,7 +888,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("RET NZ")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xC1,
@@ -812,7 +898,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("PUSH BC")),
-            timing: 16,
+            timing: timing_constant(16),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xC5,
@@ -822,7 +908,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("RET")),
-            timing: 16,
+            timing: timing_constant(16),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xC9,
@@ -832,7 +918,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("CALL Z,${}")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xCC,
@@ -842,7 +928,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("CALL ${}")),
-            timing: 24,
+            timing: timing_constant(24),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xCD,
@@ -852,7 +938,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("ADC A,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xCE,
@@ -862,7 +948,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("LD (FF00+${}),A")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xE0,
@@ -872,7 +958,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("LD (FF00+C),A")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xE2,
@@ -882,7 +968,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("AND A,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xE6,
@@ -892,7 +978,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u16(String::from("LD (${}),A")),
-            timing: 16,
+            timing: timing_constant(16),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xEA,
@@ -902,7 +988,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("LD A,(FF00 + ${})")),
-            timing: 12,
+            timing: timing_constant(12),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xF0,
@@ -912,7 +998,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_u8(String::from("CP A,${}")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: None,
                 opcode: 0xFE,
@@ -922,7 +1008,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("RL C")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: Some(0xCB),
                 opcode: 0x11,
@@ -932,7 +1018,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
         },
         InstructionSpecification {
             name: name_none(String::from("BIT 7,H")),
-            timing: 8,
+            timing: timing_constant(8),
             params: InstructionParamSpecification {
                 prefix: Some(0xCB),
                 opcode: 0x7C,
