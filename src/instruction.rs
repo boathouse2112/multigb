@@ -391,6 +391,61 @@ fn and_8_bit_register_value(register: Register8Bit) -> ExecuteFn {
     })
 }
 
+fn rl(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |_, _, cpu| {
+        let value = cpu.get_register_8_bit(register);
+        let old_carry = cpu.get_flag(Flag::C);
+        let rotated_bit = value & 0b1000_0000 >> 7;
+        let new_carry = if rotated_bit == 1 { true } else { false };
+        // Do a normal left-rotation, then set the lowest bit to old_carry
+        let mut result = value.rotate_left(1);
+        if old_carry {
+            result = result | 0b0000_0001;
+        } else {
+            result = result & 0b1111_1110;
+        }
+        cpu.set_register_8_bit(register, result);
+        cpu.set_flag(Flag::C, new_carry)
+    })
+}
+
+fn rlc(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |_, _, cpu| {
+        let value = cpu.get_register_8_bit(register);
+        let rotated_bit = value & 0b1000_0000 >> 7;
+        let carry = if rotated_bit == 1 { true } else { false };
+        let result = value.rotate_left(1);
+        cpu.set_register_8_bit(register, result);
+        cpu.set_flag(Flag::C, carry)
+    })
+}
+
+fn rrc(register: Register8Bit) -> ExecuteFn {
+    Box::new(move |_, _, cpu| {
+        let value = cpu.get_register_8_bit(register);
+        let rotated_bit = value & 0x01;
+        let carry = if rotated_bit == 1 { true } else { false };
+        let result = value.rotate_right(1);
+        cpu.set_register_8_bit(register, result);
+        cpu.set_flag(Flag::C, carry)
+    })
+}
+
+/// Test whether the given bit is set in the given register. Set Flag::Z to 0 if it's not.
+fn test_bit(bit: u8, register: Register8Bit) -> ExecuteFn {
+    Box::new(move |_, _, cpu| {
+        let value = cpu.get_register_8_bit(register);
+        let test_mask = (1 << bit) as u8;
+        let result = (value & test_mask) != 0;
+
+        cpu.set_flag(Flag::N, false);
+        cpu.set_flag(Flag::H, true);
+        if !result {
+            cpu.set_flag(Flag::Z, false);
+        }
+    })
+}
+
 // Load
 
 fn load_value_to_8_bit_register(register: Register8Bit) -> ExecuteFn {
@@ -747,7 +802,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x07,
                 immediate_value_type: None,
             },
-            execute: noop(), // TODO
+            execute: rlc(Register8Bit::A),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD (${}),SP")),
@@ -827,7 +882,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x0F,
                 immediate_value_type: None,
             },
-            execute: noop(), // TODO
+            execute: rrc(Register8Bit::A),
         },
         InstructionSpecification {
             name: name_u16(String::from("LD DE,${}")),
@@ -877,7 +932,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x17,
                 immediate_value_type: None,
             },
-            execute: noop(), // TODO
+            execute: rl(Register8Bit::A),
         },
         InstructionSpecification {
             name: name_i8(String::from("JR Addr_{}")),
@@ -1297,7 +1352,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x11,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: rl(Register8Bit::C),
         },
         InstructionSpecification {
             name: name_none(String::from("BIT 7,H")),
@@ -1307,7 +1362,7 @@ pub fn instruction_specs() -> Vec<InstructionSpecification> {
                 opcode: 0x7C,
                 immediate_value_type: None,
             },
-            execute: noop(),
+            execute: test_bit(7, Register8Bit::H),
         },
     ]
 }
