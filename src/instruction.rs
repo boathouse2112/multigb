@@ -1,11 +1,10 @@
-
 #[derive(Debug, PartialOrd, PartialEq)]
 pub enum InstructionArg {
-    Direct8(String),
-    Direct16(String),
-    Indirect16(String),
+    DirectRegister8(String),
+    DirectRegister16(String),
+    IndirectRegister16(String),
     Condition(String),
-    Vec(String),
+    Vector(String),
     Literal(u8),
     Hli,
     Hld,
@@ -38,13 +37,13 @@ pub enum InstructionName {
     Swap(InstructionArg),
     // Bit shift
     Rl(InstructionArg),
-    Rla(),
+    Rla,
     Rlc(InstructionArg),
-    Rlca(),
+    Rlca,
     Rr(InstructionArg),
-    Rra(),
+    Rra,
     Rrc(InstructionArg),
-    Rrca(),
+    Rrca,
     Sla(InstructionArg),
     Sra(InstructionArg),
     Srl(InstructionArg),
@@ -76,9 +75,27 @@ pub enum InstructionName {
 
 #[derive(PartialOrd, PartialEq)]
 pub struct Instruction {
-    opcode: u16,
-    name: InstructionName,
-    length: u8,
-    cycles_branch: u8,
-    cycles_no_branch: u8,
+    pub opcode: u16,
+    pub name: InstructionName,
+    pub length: u8,
+    pub cycles_branch: u8,
+    pub cycles_no_branch: u8,
+}
+
+impl Instruction {
+    pub fn new(
+        opcode: u16,
+        name: InstructionName,
+        length: u8,
+        cycles_branch: u8,
+        cycles_no_branch: u8,
+    ) -> Self {
+        Instruction {
+            opcode,
+            name,
+            length,
+            cycles_branch,
+            cycles_no_branch,
+        }
+    }
 }
