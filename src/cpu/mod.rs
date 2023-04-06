@@ -1,21 +1,37 @@
 use crate::bus;
 use crate::console::Console;
-use crate::cpu::flag::Flags;
+use crate::cpu::flags::Flags;
 use crate::instruction::{Instruction, InstructionArg, InstructionName};
-use crate::util::Number;
+use enum_map::EnumMap;
+use enum_map::{enum_map, Enum};
 
-mod flag;
+mod flags;
+
+#[derive(Enum, Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum Register8 {
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    H,
+    L,
+}
+
+#[derive(Enum, Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum Register16 {
+    AF,
+    BC,
+    DE,
+    HL,
+    SP,
+    PC,
+}
 
 #[derive(Clone, Debug)]
 pub struct Cpu {
-    pub a: u8,
-    pub b: u8,
-    pub c: u8,
-    pub d: u8,
-    pub e: u8,
-    pub f: u8,
-    pub h: u8,
-    pub l: u8,
+    registers_8: EnumMap<Register8, u8>, // All 8-bit registers except F
     pub pc: u16,
     pub sp: u16,
     pub flags: Flags,
@@ -24,34 +40,72 @@ pub struct Cpu {
 impl Cpu {
     pub fn new() -> Self {
         Cpu {
-            a: 0,
-            b: 0,
-            c: 0,
-            d: 0,
-            e: 0,
-            f: 0,
-            h: 0,
-            l: 0,
+            registers_8: EnumMap::from(enum_map! {
+                A => 0,
+                B => 0,
+                C => 0,
+                D => 0,
+                E => 0,
+                H => 0,
+                L => 0,
+            }),
             pc: 0,
             sp: 0,
             flags: Flags::new(),
         }
     }
 
-    pub fn af(&self) -> u16 {
-        Cpu::join(self.a, self.flags.bits())
+    pub fn register_8(&self, register: Register8) -> u8 {
+        self.registers_8[register]
     }
 
-    pub fn bc(&self) -> u16 {
-        Cpu::join(self.b, self.c)
+    pub fn set_register_8(&mut self, register: Register8, value: u8) {
+        match register {
+            Register8::F => self.flags = Flags::from(value),
+            _ => self.registers_8[register] = value,
+        }
     }
 
-    pub fn de(&self) -> u16 {
-        Cpu::join(self.d, self.e)
+    pub fn register_16(&self, register: Register16) -> u16 {
+        match register {
+            Register16::AF => Cpu::join(self.register_8(Register8::A), self.flags.bits()),
+            Register16::BC => {
+                Cpu::join(self.register_8(Register8::B), self.register_8(Register8::C))
+            }
+            Register16::DE => {
+                Cpu::join(self.register_8(Register8::D), self.register_8(Register8::E))
+            }
+            Register16::HL => {
+                Cpu::join(self.register_8(Register8::H), self.register_8(Register8::L))
+            }
+            Register16::SP => self.sp,
+            Register16::PC => self.pc,
+        }
     }
 
-    pub fn hl(&self) -> u16 {
-        Cpu::join(self.h, self.l)
+    pub fn set_register_16(&mut self, register: Register16, value: u16) {
+        let high_byte = ((value & 0xFF00) >> 8) as u8;
+        let low_byte = (value & 0x00FF) as u8;
+        match register {
+            Register16::AF => {
+                self.set_register_8(Register8::A, high_byte);
+                self.set_register_8(Register8::F, low_byte);
+            }
+            Register16::BC => {
+                self.set_register_8(Register8::B, high_byte);
+                self.set_register_8(Register8::C, low_byte);
+            }
+            Register16::DE => {
+                self.set_register_8(Register8::D, high_byte);
+                self.set_register_8(Register8::E, low_byte);
+            }
+            Register16::HL => {
+                self.set_register_8(Register8::H, high_byte);
+                self.set_register_8(Register8::L, low_byte);
+            }
+            Register16::SP => self.sp = value,
+            Register16::PC => self.pc = value,
+        }
     }
 
     /// Join two u8 registers into a u16 register
@@ -176,5 +230,61 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
             InstructionArg::IndirectU16 => {}
         };
         todo!()
+    }
+
+    enum SetterValue {
+        U8(u8),
+        U16(u16),
+    }
+
+    /// Creates a function that sets the location of the instruction argument to the given value.
+    /// Only works for InstructionArg variants that can be set
+    fn arg_setter(arg: InstructionArg) -> impl Fn(&mut Console, SetterValue) {
+        match arg {
+            InstructionArg::DirectRegister8(register) => |console, value| {
+                if let SetterValue::U8(value) = value {
+                    console.cpu.set_register_8(register, value);
+                } else {
+                    panic!("expect value to be u8")
+                }
+            },
+            InstructionArg::DirectRegister16(register) => |console, value| {
+                if let SetterValue::U16(value) = value {
+                    console.cpu.set_register_16(register, value);
+                } else {
+                    panic!("expect value to be u16")
+                }
+            },
+            InstructionArg::IndirectRegister16(register) => |console, value| {
+                if let SetterValue::U8(value) = value {
+                    let address = console.cpu.register_16(Register16::HL);
+                    bus::write_u8(console, address, value);
+                } else {
+                    panic!("expect value to be u8")
+                }
+            },
+            // InstructionArg::Vector(_) => {}
+            InstructionArg::Hli => |console, value| {
+                if let SetterValue::U16(value) = value {
+                    console
+                        .cpu
+                        .set_register_16(Register16::HL, value.wrapping_add(1));
+                } else {
+                    panic!("expect value to be u16")
+                }
+            },
+            InstructionArg::Hld => |console, value| {
+                if let SetterValue::U16(value) = value {
+                    console
+                        .cpu
+                        .set_register_16(Register16::HL, value.wrapping_sub(1));
+                } else {
+                    panic!("expect value to be u16")
+                }
+            },
+            InstructionArg::IndirectFF00PlusC => |console, value| {},
+            InstructionArg::IndirectFF00PlusU8 => {}
+            InstructionArg::IndirectU16 => {}
+        }
     }
 }

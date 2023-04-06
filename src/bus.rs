@@ -24,3 +24,19 @@ impl Bus {
 pub fn read_u8(console: &mut Console, addr: u16) -> u8 {
     console.bus.memory[addr as usize]
 }
+
+pub fn read_i8(console: &mut Console, addr: u16) -> i8 {
+    read_u8(console, addr) as i8
+}
+
+pub fn read_u16(console: &mut Console, addr: u16) -> u16 {
+    todo!()
+}
+
+pub fn write_u8(console: &mut Console, addr: u16, value: u8) {
+    todo!("write_u8")
+}
+
+pub fn write_u16(console: &mut Console, addr: u16, value: u8) {
+    todo!("write_u16")
+}

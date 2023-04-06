@@ -3,13 +3,14 @@ use crate::console::Console;
 use crate::cpu::Cpu;
 use std::{error, fs, i8, num::Wrapping, result};
 
-mod cpu;
-// mod old_instruction;
 mod bus;
 mod console;
+mod cpu;
 mod instruction;
 mod instructions;
 mod util;
+
+// TODO: Can bus::read functions take a &Console instead of a &mut Console?
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     let rom = fs::read("roms/bootstrap.rom")?;

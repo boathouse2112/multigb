@@ -1,20 +1,25 @@
+mod arg;
+mod instr;
+
+use crate::cpu::{Register16, Register8};
+
 #[derive(Debug, PartialOrd, PartialEq)]
 pub enum InstructionArg {
-    DirectRegister8(String),
-    DirectRegister16(String),
-    IndirectRegister16(String),
-    Condition(String),
-    Vector(String),
-    Literal(u8),
-    Hli,
-    Hld,
-    SpPlusI8,
-    IndirectFF00PlusC,
-    IndirectFF00PlusU8,
-    U8,
-    I8,
-    U16,
-    IndirectU16,
+    DirectRegister8(Register8),     // -
+    DirectRegister16(Register16),   // -
+    IndirectRegister16(Register16), // -
+    Condition(String),              // -
+    Vector(String),                 // -
+    Literal(u8),                    // -
+    Hli,                            // -
+    Hld,                            // -
+    SpPlusI8,                       // -
+    IndirectFF00PlusC,              // -
+    IndirectFF00PlusU8,             // -
+    U8,                             // -
+    I8,                             // -
+    U16,                            // -
+    IndirectU16,                    // -
 }
 
 #[derive(Debug, PartialOrd, PartialEq)]
