@@ -1,7 +1,7 @@
 use crate::bus::Bus;
 use crate::console::Console;
 use crate::cpu::Cpu;
-use std::{error, fs, i8, num::Wrapping, result};
+use std::{error, fs};
 
 mod bus;
 mod console;

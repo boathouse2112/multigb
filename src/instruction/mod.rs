@@ -1,70 +1,69 @@
 mod arg;
 mod instr;
 
-use crate::cpu::{Register16, Register8};
+use crate::instruction::arg::{Condition, IntoWriteArg, ReadArg, RstVector, WriteArg};
 
-#[derive(Debug, PartialOrd, PartialEq)]
-pub enum InstructionArg {
-    DirectRegister8(Register8),     // -
-    DirectRegister16(Register16),   // -
-    IndirectRegister16(Register16), // -
-    Condition(String),              // -
-    Vector(String),                 // -
-    Literal(u8),                    // -
-    Hli,                            // -
-    Hld,                            // -
-    SpPlusI8,                       // -
-    IndirectFF00PlusC,              // -
-    IndirectFF00PlusU8,             // -
-    U8,                             // -
-    I8,                             // -
-    U16,                            // -
-    IndirectU16,                    // -
+// ==== Arg utility types ====
+
+type BoxRead<T> = Box<dyn ReadArg<ReadValue = T>>;
+type BoxWrite<T> = Box<dyn ReadArg<ReadValue = T>>;
+trait ReadWrite: ReadArg + WriteArg {}
+type BoxReadWrite<T> = Box<dyn ReadWrite<ReadValue = T, WriteValue = T>>;
+enum Writeable<T> {
+    IntoWriteArg(Box<dyn IntoWriteArg<ReadValue = T>>),
+    WriteArg(Box<dyn WriteArg<WriteValue = T>>),
 }
 
-#[derive(Debug, PartialOrd, PartialEq)]
 pub enum InstructionName {
     // Arithmetic & logic
-    Adc(InstructionArg, InstructionArg),
-    Add(InstructionArg, InstructionArg),
-    And(InstructionArg, InstructionArg),
-    Cp(InstructionArg, InstructionArg),
-    Dec(InstructionArg),
-    Inc(InstructionArg),
-    Or(InstructionArg, InstructionArg),
-    Sbc(InstructionArg, InstructionArg),
-    Sub(InstructionArg, InstructionArg),
-    Xor(InstructionArg, InstructionArg),
+    Adc(BoxReadWrite<u8>, BoxRead<u8>),
+    Add8(BoxReadWrite<u8>, BoxRead<u8>),
+    Add16(BoxReadWrite<u16>, BoxRead<u8>),
+    And(BoxReadWrite<u8>, BoxRead<u8>),
+    Cp(BoxRead<u8>, BoxRead<u8>),
+    Dec8(BoxReadWrite<u8>),
+    Dec16(BoxReadWrite<u16>),
+    Inc8(BoxReadWrite<u8>),
+    Inc16(BoxReadWrite<u16>),
+    Or(BoxReadWrite<u8>, BoxRead<u8>),
+    Sbc(BoxReadWrite<u8>, BoxRead<u8>),
+    Sub(BoxReadWrite<u8>, BoxRead<u8>),
+    Xor(BoxReadWrite<u8>, BoxRead<u8>),
     // Bitwise operations
-    Bit(InstructionArg, InstructionArg),
-    Res(InstructionArg, InstructionArg),
-    Set(InstructionArg, InstructionArg),
-    Swap(InstructionArg),
+    Bit(BoxRead<u8>, BoxRead<u8>),
+    Res(BoxRead<u8>, BoxRead<u8>),
+    Set(BoxRead<u8>, BoxRead<u8>),
+    Swap(BoxReadWrite<u8>),
     // Bit shift
-    Rl(InstructionArg),
+    Rl(BoxReadWrite<u8>),
     Rla,
-    Rlc(InstructionArg),
+    Rlc(BoxReadWrite<u8>),
     Rlca,
-    Rr(InstructionArg),
+    Rr(BoxReadWrite<u8>),
     Rra,
-    Rrc(InstructionArg),
+    Rrc(BoxReadWrite<u8>),
     Rrca,
-    Sla(InstructionArg),
-    Sra(InstructionArg),
-    Srl(InstructionArg),
+    Sla(BoxReadWrite<u8>),
+    Sra(BoxReadWrite<u8>),
+    Srl(BoxReadWrite<u8>),
     // Load instructions
-    Ld(InstructionArg, InstructionArg),
-    Lhd(InstructionArg, InstructionArg),
+    Ld8(Writeable<u8>, BoxRead<u8>),
+    Ld16(Writeable<u16>, BoxRead<u16>),
+    Ldh(BoxWrite<u8>, BoxRead<u8>),
     // Jumps & subroutines
-    Call(InstructionArg),
-    Jp(InstructionArg),
-    Jr(InstructionArg),
+    Call(BoxRead<u16>),
+    CallIf(BoxRead<Condition>, BoxRead<u16>),
+    Jp(BoxRead<u16>),
+    JpIf(BoxRead<Condition>, BoxRead<u16>),
+    Jr(BoxRead<i8>),
+    JrIf(BoxRead<Condition>, BoxRead<i8>),
     Ret,
+    RetIf(BoxRead<Condition>),
     Reti,
-    Rst(InstructionArg),
+    Rst(BoxRead<RstVector>),
     // Stack operations
-    Pop(InstructionArg),
-    Push(InstructionArg),
+    Pop(BoxWrite<u16>),
+    Push(BoxRead<u16>),
     // Misc,
     Ccf,
     Cpl,
@@ -78,7 +77,6 @@ pub enum InstructionName {
     Unused,
 }
 
-#[derive(PartialOrd, PartialEq)]
 pub struct Instruction {
     pub opcode: u16,
     pub name: InstructionName,
