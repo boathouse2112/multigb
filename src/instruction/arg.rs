@@ -18,7 +18,7 @@ pub trait ReadArg {
     /// returns: (Self::Value, i32)
     ///     Self::Value is the read value
     ///     i32 is the offset to update cpu.pc by.
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32);
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16);
 }
 
 pub trait IntoWriteArg: ReadArg {
@@ -70,7 +70,7 @@ pub struct Literal8 {
 impl ReadArg for Literal8 {
     type ReadValue = u8;
 
-    fn read(&self, _: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, _: &mut Console) -> (Self::ReadValue, i16) {
         (self.value, 0)
     }
 }
@@ -78,7 +78,7 @@ impl ReadArg for Literal8 {
 impl ReadArg for Condition {
     type ReadValue = Condition;
 
-    fn read(&self, _: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, _: &mut Console) -> (Self::ReadValue, i16) {
         (self.clone(), 0)
     }
 }
@@ -86,7 +86,7 @@ impl ReadArg for Condition {
 impl ReadArg for RstVector {
     type ReadValue = RstVector;
 
-    fn read(&self, _: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, _: &mut Console) -> (Self::ReadValue, i16) {
         (self.clone(), 0)
     }
 }
@@ -99,7 +99,7 @@ pub struct Register8 {
 impl ReadArg for Register8 {
     type ReadValue = u8;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let value = console.cpu.register_8(self.register);
         (value, 0)
     }
@@ -121,7 +121,7 @@ pub struct Register16 {
 impl ReadArg for Register16 {
     type ReadValue = u16;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let value = console.cpu.register_16(self.register);
         (value, 0)
     }
@@ -141,7 +141,7 @@ pub struct U8FromFF00PlusC;
 impl ReadArg for U8FromFF00PlusC {
     type ReadValue = u8;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let address_base: u16 = 0xFF00;
         let address_offset = console.cpu.register_8(cpu::Register8::C);
         let address = address_base.checked_add(address_offset.into()).unwrap();
@@ -169,7 +169,7 @@ pub struct U8FromFF00PlusU8;
 impl ReadArg for U8FromFF00PlusU8 {
     type ReadValue = u8;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let address_base: u16 = 0xFF00;
 
         let pc = console.cpu.pc;
@@ -225,9 +225,9 @@ impl ReadArg for U8FromHlInc {
     ///
     /// * `console`: The gameboy console object
     ///
-    /// returns: (u8, i32)
+    /// returns: (u8, i16)
     ///
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let address = console.cpu.register_16(cpu::Register16::HL);
         let value = bus::read_u8(console, address);
 
@@ -272,9 +272,9 @@ impl ReadArg for U8FromHlDec {
     ///
     /// * `console`: The gameboy console object
     ///
-    /// returns: (u8, i32)
+    /// returns: (u8, i16)
     ///
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let address = console.cpu.register_16(cpu::Register16::HL);
         let value = bus::read_u8(console, address);
 
@@ -311,7 +311,7 @@ struct SpPlusI8;
 impl ReadArg for SpPlusI8 {
     type ReadValue = u16;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let pc = console.cpu.pc;
         let sp = console.cpu.sp;
         let offset = bus::read_i8(console, pc);
@@ -327,7 +327,7 @@ pub struct U8;
 impl ReadArg for U8 {
     type ReadValue = u8;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let pc = console.cpu.pc;
         let value = bus::read_u8(console, pc);
         (value, 1)
@@ -340,7 +340,7 @@ pub struct I8;
 impl ReadArg for I8 {
     type ReadValue = i8;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let pc = console.cpu.pc;
         let value = bus::read_i8(console, pc);
         (value, 1)
@@ -353,7 +353,7 @@ pub struct U16;
 impl ReadArg for U16 {
     type ReadValue = u16;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let pc = console.cpu.pc;
         let value = bus::read_u16(console, pc);
         (value, 2)
@@ -366,7 +366,7 @@ pub struct U8FromU16;
 impl ReadArg for U8FromU16 {
     type ReadValue = u8;
 
-    fn read(&self, console: &mut Console) -> (Self::ReadValue, i32) {
+    fn read(&self, console: &mut Console) -> (Self::ReadValue, i16) {
         let pc = console.cpu.pc;
         let address = bus::read_u16(console, pc);
 

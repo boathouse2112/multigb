@@ -20,89 +20,89 @@ struct DmgOpts {
     CBPrefixed: Vec<DmgOpt>,
 }
 
-#[derive(Debug, PartialOrd, PartialEq)]
-enum InstructionArg {
-    Direct8(String),
-    Direct16(String),
-    Indirect16(String),
-    Condition(String),
-    Vec(String),
-    Literal(u8),
-    Hli,
-    Hld,
-    SpPlusI8,
-    IndirectFF00PlusC,
-    IndirectFF00PlusU8,
-    U8,
-    I8,
-    U16,
-    IndirectU16,
-}
+// #[derive(Debug, PartialOrd, PartialEq)]
+// enum InstructionArg {
+//     Direct8(String),
+//     Direct16(String),
+//     Indirect16(String),
+//     Condition(String),
+//     Vec(String),
+//     Literal(u8),
+//     Hli,
+//     Hld,
+//     SpPlusI8,
+//     IndirectFF00PlusC,
+//     IndirectFF00PlusU8,
+//     U8,
+//     I8,
+//     U16,
+//     IndirectU16,
+// }
 
-#[derive(Debug, PartialOrd, PartialEq)]
-enum InstructionName {
-    // Arithmetic & logic
-    Adc(InstructionArg, InstructionArg),
-    Add(InstructionArg, InstructionArg),
-    And(InstructionArg, InstructionArg),
-    Cp(InstructionArg, InstructionArg),
-    Dec(InstructionArg),
-    Inc(InstructionArg),
-    Or(InstructionArg, InstructionArg),
-    Sbc(InstructionArg, InstructionArg),
-    Sub(InstructionArg, InstructionArg),
-    Xor(InstructionArg, InstructionArg),
-    // Bitwise operations
-    Bit(InstructionArg, InstructionArg),
-    Res(InstructionArg, InstructionArg),
-    Set(InstructionArg, InstructionArg),
-    Swap(InstructionArg),
-    // Bit shift
-    Rl(InstructionArg),
-    Rla(),
-    Rlc(InstructionArg),
-    Rlca(),
-    Rr(InstructionArg),
-    Rra(),
-    Rrc(InstructionArg),
-    Rrca(),
-    Sla(InstructionArg),
-    Sra(InstructionArg),
-    Srl(InstructionArg),
-    // Load instructions
-    Ld(InstructionArg, InstructionArg),
-    Lhd(InstructionArg, InstructionArg),
-    // Jumps & subroutines
-    Call(InstructionArg),
-    Jp(InstructionArg),
-    Jr(InstructionArg),
-    Ret,
-    Reti,
-    Rst(InstructionArg),
-    // Stack operations
-    Pop(InstructionArg),
-    Push(InstructionArg),
-    // Misc,
-    Ccf,
-    Cpl,
-    Daa,
-    Di,
-    Ei,
-    Halt,
-    Nop,
-    Scf,
-    Stop,
-    Unused,
-}
-
-#[derive(PartialOrd, PartialEq)]
-struct Instruction {
-    opcode: u16,
-    name: InstructionName,
-    length: u8,
-    cycles_branch: u8,
-    cycles_no_branch: u8,
-}
+// #[derive(Debug, PartialOrd, PartialEq)]
+// enum InstructionName {
+//     // Arithmetic & logic
+//     Adc(InstructionArg, InstructionArg),
+//     Add(InstructionArg, InstructionArg),
+//     And(InstructionArg, InstructionArg),
+//     Cp(InstructionArg, InstructionArg),
+//     Dec(InstructionArg),
+//     Inc(InstructionArg),
+//     Or(InstructionArg, InstructionArg),
+//     Sbc(InstructionArg, InstructionArg),
+//     Sub(InstructionArg, InstructionArg),
+//     Xor(InstructionArg, InstructionArg),
+//     // Bitwise operations
+//     Bit(InstructionArg, InstructionArg),
+//     Res(InstructionArg, InstructionArg),
+//     Set(InstructionArg, InstructionArg),
+//     Swap(InstructionArg),
+//     // Bit shift
+//     Rl(InstructionArg),
+//     Rla(),
+//     Rlc(InstructionArg),
+//     Rlca(),
+//     Rr(InstructionArg),
+//     Rra(),
+//     Rrc(InstructionArg),
+//     Rrca(),
+//     Sla(InstructionArg),
+//     Sra(InstructionArg),
+//     Srl(InstructionArg),
+//     // Load instructions
+//     Ld(InstructionArg, InstructionArg),
+//     Lhd(InstructionArg, InstructionArg),
+//     // Jumps & subroutines
+//     Call(InstructionArg),
+//     Jp(InstructionArg),
+//     Jr(InstructionArg),
+//     Ret,
+//     Reti,
+//     Rst(InstructionArg),
+//     // Stack operations
+//     Pop(InstructionArg),
+//     Push(InstructionArg),
+//     // Misc,
+//     Ccf,
+//     Cpl,
+//     Daa,
+//     Di,
+//     Ei,
+//     Halt,
+//     Nop,
+//     Scf,
+//     Stop,
+//     Unused,
+// }
+//
+// #[derive(PartialOrd, PartialEq)]
+// struct Instruction {
+//     opcode: u16,
+//     name: InstructionName,
+//     length: u8,
+//     cycles_branch: u8,
+//     cycles_no_branch: u8,
+// }
 
 fn parse_instructions(opts: Vec<DmgOpt>) -> Vec<Instruction> {
     opts.into_iter()
@@ -228,28 +228,35 @@ fn instr_to_string(instr: &Instruction) -> String {
     )
 }
 
+const START_TEXT: &str = "\
+fn instructions() -> Vec<Instruction> {
+";
+
 fn main() -> Result<()> {
     let dmg_opts_json = fs::read_to_string("dmgops.json")?;
     let dmg_opts: DmgOpts = serde_json::from_str(&dmg_opts_json)?;
 
     let unprefixed_instructions = parse_instructions(dmg_opts.Unprefixed);
-    let unprefixed_instructions: Vec<_> = unprefixed_instructions
+    let mut unprefixed_instructions: Vec<_> = unprefixed_instructions
         .into_iter()
         .filter(|instr| instr.name != InstructionName::Unused)
         .collect();
 
     let prefixed_instructions = parse_instructions(dmg_opts.CBPrefixed);
-    let prefixed_instructions: Vec<_> = prefixed_instructions.into_iter().map(|instr|{
-        let opcode = 0xCB00 + instr.opcode;
-        Instruction {
-            opcode,
-            ..instr
-        }
-    }).collect();
     let prefixed_instructions: Vec<_> = prefixed_instructions
+        .into_iter()
+        .map(|instr| {
+            let opcode = 0xCB00 + instr.opcode;
+            Instruction { opcode, ..instr }
+        })
+        .collect();
+    let mut prefixed_instructions: Vec<_> = prefixed_instructions
         .into_iter()
         .filter(|instr| instr.name != InstructionName::Unused)
         .collect();
+
+    unprefixed_instructions.append(&mut prefixed_instructions);
+    let instructions = unprefixed_instructions;
 
     let lines = unprefixed_instructions
         .iter()
@@ -263,11 +270,14 @@ fn main() -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let text = format!("
+    let text = format!(
+        "
     use crate::instruction::{{Instruction, InstructionName, InstructionArg}};\n\
     #[rustfmt_skip]
     fn instructions() -> Vec<Instruction> {{\nvec![{}{}]\n}}\
-    ", lines, prefixed_lines);
+    ",
+        lines, prefixed_lines
+    );
 
     fs::write("codegen/instructions.rs", text)?;
 

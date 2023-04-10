@@ -1,7 +1,7 @@
 use crate::bus;
 use crate::console::Console;
 use crate::cpu::flags::Flags;
-use crate::instruction::{Instruction, InstructionArg, InstructionName};
+use crate::instruction::{Instruction, InstructionName};
 use enum_map::EnumMap;
 use enum_map::{enum_map, Enum};
 
@@ -40,15 +40,16 @@ pub struct Cpu {
 impl Cpu {
     pub fn new() -> Self {
         Cpu {
-            registers_8: EnumMap::from(enum_map! {
-                A => 0,
-                B => 0,
-                C => 0,
-                D => 0,
-                E => 0,
-                H => 0,
-                L => 0,
-            }),
+            registers_8: enum_map! {
+                Register8::A => 0,
+                Register8::B => 0,
+                Register8::C => 0,
+                Register8::D => 0,
+                Register8::E => 0,
+                Register8::H => 0,
+                Register8::L => 0,
+                Register8::F => 0, // Unused TODO: Move flags into here somehow? flags::interpret()?
+            },
             pc: 0,
             sp: 0,
             flags: Flags::new(),
@@ -134,22 +135,352 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
         .find(|instr| instr.opcode == opcode)
         .unwrap_or_else(|| panic!("Opcode 0x{:X} has an associated instruction.", opcode));
 
+    fn add_offset(console: &mut Console, pc_offset: i16) {
+        console.cpu.pc = console.cpu.pc.wrapping_add_signed(pc_offset);
+    }
+
     // Run instruction
-    match instruction.name {
-        InstructionName::Adc(lhs, rhs) => {}
-        InstructionName::Add(_, _) => {}
-        InstructionName::And(_, _) => {}
-        InstructionName::Cp(_, _) => {}
-        InstructionName::Dec(_) => {}
-        InstructionName::Inc(_) => {}
-        InstructionName::Or(_, _) => {}
-        InstructionName::Sbc(_, _) => {}
-        InstructionName::Sub(_, _) => {}
-        InstructionName::Xor(_, _) => {}
-        InstructionName::Bit(_, _) => {}
-        InstructionName::Res(_, _) => {}
-        InstructionName::Set(_, _) => {}
-        InstructionName::Swap(_) => {}
+    match &instruction.name {
+        InstructionName::Adc(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let old_carry = if console.cpu.flags.carry { 1 } else { 0 };
+            let (result, overflow_1) = lhs_value.overflowing_add(rhs_value);
+            let (result, overflow_2) = result.overflowing_add(old_carry);
+            lhs.write(console, result);
+
+            let half_result = (lhs_value & 0x0F) + (rhs_value & 0x0F) + old_carry;
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = (half_result & 0x10) != 0;
+            let carry = overflow_1 || overflow_2;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Add8(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let (result, overflow) = lhs_value.overflowing_add(rhs_value);
+            lhs.write(console, result);
+
+            let half_result = (lhs_value & 0x0F) + (rhs_value & 0x0F);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = (half_result & 0x10) != 0;
+            let carry = overflow;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::AddI8(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let result = lhs_value.wrapping_add_signed(rhs_value.into());
+            lhs.write(console, result);
+
+            // Gameboy determines flags for (u16 + i8) by treating it as (u8 + u8)
+            let (_, u8_overflow) = ((lhs_value & 0x00_FF) as u8).overflowing_add(rhs_value as u8);
+            let half_result = ((lhs_value & 0x0F) as u8) + ((rhs_value & 0x0F) as u8);
+
+            let zero = false;
+            let negative = false;
+            let half_carry = (half_result & 0x10) != 0;
+            let carry = u8_overflow;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Add16(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let (result, overflow) = lhs_value.overflowing_add(rhs_value);
+            lhs.write(console, result);
+
+            let half_result = (lhs_value & 0x0F_FF) + (rhs_value & 0x0F_FF);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = (half_result & 0x10_00) != 0;
+            let carry = overflow;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::And(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let result = lhs_value & rhs_value;
+            lhs.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = true;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Cp(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let result = lhs_value.wrapping_sub(rhs_value);
+
+            let zero = result == 0;
+            let negative = true;
+            let half_carry = (lhs_value & 0x0F) < (rhs_value & 0x0F);
+            let carry = lhs_value < rhs_value;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Dec8(n) => {
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let result = n_value.wrapping_sub(1);
+            n.write(console, result);
+
+            let zero = result == 0;
+            let negative = true;
+            let half_carry = (n_value & 0x0F) < 1;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Dec16(n) => {
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let result = n_value.wrapping_sub(1);
+            n.write(console, result);
+
+            let zero = result == 0;
+            let negative = true;
+            let half_carry = (n_value & 0x0F) < 1;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Inc8(n) => {
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let result = n_value.wrapping_add(1);
+            n.write(console, result);
+
+            let half_result = (n_value & 0x0F) + 1;
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = (half_result & 0x10) != 0;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Inc16(n) => {
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let result = n_value.wrapping_add(1);
+            n.write(console, result);
+
+            let half_result = (n_value & 0x0F) + 1;
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = (half_result & 0x10) != 0;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Or(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let result = lhs_value & rhs_value;
+            lhs.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Sbc(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let old_carry = if console.cpu.flags.carry { 1 } else { 0 };
+            let result = lhs_value.wrapping_sub(rhs_value).wrapping_sub(old_carry);
+            lhs.write(console, result);
+
+            let zero = result == 0;
+            let negative = true;
+            let half_carry = (lhs_value & 0x0F) < (rhs_value & 0x0F) + old_carry;
+            let carry = lhs_value < rhs_value + old_carry;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Sub(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let result = lhs_value.wrapping_sub(rhs_value);
+            lhs.write(console, result);
+
+            let zero = result == 0;
+            let negative = true;
+            let half_carry = (lhs_value & 0x0F) < (rhs_value & 0x0F);
+            let carry = lhs_value < rhs_value;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Xor(lhs, rhs) => {
+            let (lhs_value, pc_offset) = lhs.read(console);
+            add_offset(console, pc_offset);
+            let (rhs_value, pc_offset) = rhs.read(console);
+            add_offset(console, pc_offset);
+
+            let result = lhs_value ^ rhs_value;
+            lhs.write(console, result);
+
+            let zero = result == 0;
+            let negative = true;
+            let half_carry = false;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Bit(bit_idx, n) => {
+            let (bit_idx_value, pc_offset) = bit_idx.read(console);
+            add_offset(console, pc_offset);
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let bit_mask = 1 << bit_idx_value;
+            let bit_set = (n_value & bit_mask) != 0;
+
+            let zero = !bit_set;
+            let negative = false;
+            let half_carry = false;
+            let carry = false;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Res(bit_idx, n) => {
+            // Set bit `bit_idx` in n to 0
+            let (bit_idx_value, pc_offset) = bit_idx.read(console);
+            add_offset(console, pc_offset);
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let bit_mask = !(1 << bit_idx_value);
+            let result = n_value & bit_mask;
+            n.write(console, result);
+        }
+        InstructionName::Set(bit_idx, n) => {
+            // Set bit `bit_idx` in n to 1
+            let (bit_idx_value, pc_offset) = bit_idx.read(console);
+            add_offset(console, pc_offset);
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let bit_mask = 1 << bit_idx_value;
+            let result = n_value | bit_mask;
+            n.write(console, result);
+        }
+        InstructionName::Swap(n) => {
+            // Swap the high 4 bytes and the low 4 bytes in n
+            let (n_value, pc_offset) = n.read(console);
+            add_offset(console, pc_offset);
+
+            let high_4 = (n_value & 0xF0) >> 4;
+            let low_4 = n_value & 0x0F;
+            let result = (low_4 << 4) + high_4;
+            n.write(console, result);
+        }
         InstructionName::Rl(_) => {}
         InstructionName::Rla => {}
         InstructionName::Rlc(_) => {}
@@ -161,12 +492,17 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
         InstructionName::Sla(_) => {}
         InstructionName::Sra(_) => {}
         InstructionName::Srl(_) => {}
-        InstructionName::Ld(_, _) => {}
-        InstructionName::Lhd(_, _) => {}
+        InstructionName::Ld8(_, _) => {}
+        InstructionName::Ld16(_, _) => {}
+        InstructionName::Ldh(_, _) => {}
         InstructionName::Call(_) => {}
+        InstructionName::CallIf(_, _) => {}
         InstructionName::Jp(_) => {}
+        InstructionName::JpIf(_, _) => {}
         InstructionName::Jr(_) => {}
+        InstructionName::JrIf(_, _) => {}
         InstructionName::Ret => {}
+        InstructionName::RetIf(_) => {}
         InstructionName::Reti => {}
         InstructionName::Rst(_) => {}
         InstructionName::Pop(_) => {}
@@ -181,110 +517,5 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
         InstructionName::Scf => {}
         InstructionName::Stop => {}
         InstructionName::Unused => {}
-    }
-
-    /// A parsed arg value
-    enum ArgValue {
-        U8(u8),
-        I8(i8),
-        U16(u16),
-        Condition,
-    }
-
-    /// Read an arg of the given type from memory.
-    /// Increments PC for each byte read
-    fn read_arg(console: &mut Console, arg: InstructionArg) -> ArgValue {
-        match arg {
-            InstructionArg::DirectRegister8(register) => match register.as_str() {
-                "A" => ArgValue::U8(console.cpu.a),
-                "B" => ArgValue::U8(console.cpu.b),
-                "C" => ArgValue::U8(console.cpu.c),
-                "D" => ArgValue::U8(console.cpu.d),
-                "E" => ArgValue::U8(console.cpu.e),
-                "F" => ArgValue::U8(console.cpu.f),
-                "H" => ArgValue::U8(console.cpu.h),
-                "L" => ArgValue::U8(console.cpu.l),
-                _ => panic!(),
-            },
-            InstructionArg::DirectRegister16(register) => match register.as_str() {
-                "AF" => ArgValue::U16(console.cpu.af()),
-                "BC" => ArgValue::U16(console.cpu.bc()),
-                "DE" => ArgValue::U16(console.cpu.de()),
-                "HL" => ArgValue::U16(console.cpu.hl()),
-                "PC" => ArgValue::U16(console.cpu.pc),
-                "SP" => ArgValue::U16(console.cpu.sp),
-                _ => panic!(),
-            },
-            InstructionArg::IndirectRegister16(_) => {}
-            InstructionArg::Condition(_) => {}
-            InstructionArg::Vector(_) => {}
-            InstructionArg::Literal(_) => {}
-            InstructionArg::Hli => {}
-            InstructionArg::Hld => {}
-            InstructionArg::SpPlusI8 => {}
-            InstructionArg::IndirectFF00PlusC => {}
-            InstructionArg::IndirectFF00PlusU8 => {}
-            InstructionArg::U8 => {}
-            InstructionArg::I8 => {}
-            InstructionArg::U16 => {}
-            InstructionArg::IndirectU16 => {}
-        };
-        todo!()
-    }
-
-    enum SetterValue {
-        U8(u8),
-        U16(u16),
-    }
-
-    /// Creates a function that sets the location of the instruction argument to the given value.
-    /// Only works for InstructionArg variants that can be set
-    fn arg_setter(arg: InstructionArg) -> impl Fn(&mut Console, SetterValue) {
-        match arg {
-            InstructionArg::DirectRegister8(register) => |console, value| {
-                if let SetterValue::U8(value) = value {
-                    console.cpu.set_register_8(register, value);
-                } else {
-                    panic!("expect value to be u8")
-                }
-            },
-            InstructionArg::DirectRegister16(register) => |console, value| {
-                if let SetterValue::U16(value) = value {
-                    console.cpu.set_register_16(register, value);
-                } else {
-                    panic!("expect value to be u16")
-                }
-            },
-            InstructionArg::IndirectRegister16(register) => |console, value| {
-                if let SetterValue::U8(value) = value {
-                    let address = console.cpu.register_16(Register16::HL);
-                    bus::write_u8(console, address, value);
-                } else {
-                    panic!("expect value to be u8")
-                }
-            },
-            // InstructionArg::Vector(_) => {}
-            InstructionArg::Hli => |console, value| {
-                if let SetterValue::U16(value) = value {
-                    console
-                        .cpu
-                        .set_register_16(Register16::HL, value.wrapping_add(1));
-                } else {
-                    panic!("expect value to be u16")
-                }
-            },
-            InstructionArg::Hld => |console, value| {
-                if let SetterValue::U16(value) = value {
-                    console
-                        .cpu
-                        .set_register_16(Register16::HL, value.wrapping_sub(1));
-                } else {
-                    panic!("expect value to be u16")
-                }
-            },
-            InstructionArg::IndirectFF00PlusC => |console, value| {},
-            InstructionArg::IndirectFF00PlusU8 => {}
-            InstructionArg::IndirectU16 => {}
-        }
     }
 }

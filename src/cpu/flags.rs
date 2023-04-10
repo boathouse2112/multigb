@@ -1,9 +1,9 @@
 #[derive(Clone, Debug)]
 pub struct Flags {
-    zero: bool,
-    negative: bool,
-    half_carry: bool,
-    carry: bool,
+    pub zero: bool,
+    pub negative: bool,
+    pub half_carry: bool,
+    pub carry: bool,
 }
 
 impl Flags {

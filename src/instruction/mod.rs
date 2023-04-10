@@ -1,15 +1,14 @@
-mod arg;
-mod instr;
+pub mod arg;
 
-use crate::instruction::arg::{Condition, IntoWriteArg, ReadArg, RstVector, WriteArg};
+pub use crate::instruction::arg::{Condition, IntoWriteArg, ReadArg, RstVector, WriteArg};
 
 // ==== Arg utility types ====
 
-type BoxRead<T> = Box<dyn ReadArg<ReadValue = T>>;
-type BoxWrite<T> = Box<dyn ReadArg<ReadValue = T>>;
-trait ReadWrite: ReadArg + WriteArg {}
-type BoxReadWrite<T> = Box<dyn ReadWrite<ReadValue = T, WriteValue = T>>;
-enum Writeable<T> {
+pub type BoxRead<T> = Box<dyn ReadArg<ReadValue = T>>;
+pub type BoxWrite<T> = Box<dyn ReadArg<ReadValue = T>>;
+pub trait ReadWrite: ReadArg + WriteArg {}
+pub type BoxReadWrite<T> = Box<dyn ReadWrite<ReadValue = T, WriteValue = T>>;
+pub enum Writeable<T> {
     IntoWriteArg(Box<dyn IntoWriteArg<ReadValue = T>>),
     WriteArg(Box<dyn WriteArg<WriteValue = T>>),
 }
@@ -18,7 +17,8 @@ pub enum InstructionName {
     // Arithmetic & logic
     Adc(BoxReadWrite<u8>, BoxRead<u8>),
     Add8(BoxReadWrite<u8>, BoxRead<u8>),
-    Add16(BoxReadWrite<u16>, BoxRead<u8>),
+    AddI8(BoxReadWrite<u16>, BoxRead<i8>),
+    Add16(BoxReadWrite<u16>, BoxRead<u16>),
     And(BoxReadWrite<u8>, BoxRead<u8>),
     Cp(BoxRead<u8>, BoxRead<u8>),
     Dec8(BoxReadWrite<u8>),
@@ -31,8 +31,8 @@ pub enum InstructionName {
     Xor(BoxReadWrite<u8>, BoxRead<u8>),
     // Bitwise operations
     Bit(BoxRead<u8>, BoxRead<u8>),
-    Res(BoxRead<u8>, BoxRead<u8>),
-    Set(BoxRead<u8>, BoxRead<u8>),
+    Res(BoxRead<u8>, BoxReadWrite<u8>),
+    Set(BoxRead<u8>, BoxReadWrite<u8>),
     Swap(BoxReadWrite<u8>),
     // Bit shift
     Rl(BoxReadWrite<u8>),
