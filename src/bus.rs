@@ -37,6 +37,6 @@ pub fn write_u8(console: &mut Console, addr: u16, value: u8) {
     todo!("write_u8")
 }
 
-pub fn write_u16(console: &mut Console, addr: u16, value: u8) {
+pub fn write_u16(console: &mut Console, addr: u16, value: u16) {
     todo!("write_u16")
 }

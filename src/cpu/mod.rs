@@ -1,9 +1,10 @@
 use crate::bus;
 use crate::console::Console;
 use crate::cpu::flags::Flags;
-use crate::instruction::{Instruction, InstructionName};
+use crate::instruction::{Condition, Instruction, InstructionName};
 use enum_map::EnumMap;
 use enum_map::{enum_map, Enum};
+use std::mem;
 
 mod flags;
 
@@ -35,6 +36,7 @@ pub struct Cpu {
     pub pc: u16,
     pub sp: u16,
     pub flags: Flags,
+    pub ime: bool,
 }
 
 impl Cpu {
@@ -53,6 +55,7 @@ impl Cpu {
             pc: 0,
             sp: 0,
             flags: Flags::new(),
+            ime: false,
         }
     }
 
@@ -115,8 +118,19 @@ impl Cpu {
     }
 }
 
+pub fn stack_pop_16(console: &mut Console) -> u16 {
+    let value = bus::read_u16(console, console.cpu.sp);
+    console.cpu.sp += 2;
+    value
+}
+
+pub fn stack_push_16(console: &mut Console, value: u16) {
+    console.cpu.sp -= 2;
+    bus::write_u16(console, console.cpu.sp, value);
+}
+
 /// Step the CPU forward 1 instruction
-pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
+pub fn step(instructions: &mut Vec<Instruction>, console: &mut Console) {
     // Read opcode
     let opcode_or_prefix = bus::read_u8(console, console.cpu.pc);
     console.cpu.pc += 1;
@@ -131,28 +145,34 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
 
     // Match opcode to instruction
     let instruction = instructions
-        .iter()
+        .iter_mut()
         .find(|instr| instr.opcode == opcode)
         .unwrap_or_else(|| panic!("Opcode 0x{:X} has an associated instruction.", opcode));
 
-    fn add_offset(console: &mut Console, pc_offset: i16) {
-        console.cpu.pc = console.cpu.pc.wrapping_add_signed(pc_offset);
+    let instruction = mem::replace(instruction, instruction.clone());
+
+    /// Test the given condition with the current console
+    fn test_condition(console: &mut Console, condition: Condition) -> bool {
+        match condition {
+            Condition::Carry => console.cpu.flags.carry,
+            Condition::NotCarry => !console.cpu.flags.carry,
+            Condition::Zero => console.cpu.flags.zero,
+            Condition::NotZero => !console.cpu.flags.zero,
+        }
     }
 
     // Run instruction
-    match &instruction.name {
-        InstructionName::Adc(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+    match instruction.name {
+        InstructionName::Adc(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
             let old_carry = if console.cpu.flags.carry { 1 } else { 0 };
-            let (result, overflow_1) = lhs_value.overflowing_add(rhs_value);
+            let (result, overflow_1) = lhs.overflowing_add(rhs);
             let (result, overflow_2) = result.overflowing_add(old_carry);
-            lhs.write(console, result);
+            lhs_writer.write(console, result);
 
-            let half_result = (lhs_value & 0x0F) + (rhs_value & 0x0F) + old_carry;
+            let half_result = (lhs & 0x0F) + (rhs & 0x0F) + old_carry;
 
             let zero = result == 0;
             let negative = false;
@@ -165,16 +185,14 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Add8(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Add8(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
-            let (result, overflow) = lhs_value.overflowing_add(rhs_value);
-            lhs.write(console, result);
+            let (result, overflow) = lhs.overflowing_add(rhs);
+            lhs_writer.write(console, result);
 
-            let half_result = (lhs_value & 0x0F) + (rhs_value & 0x0F);
+            let half_result = (lhs & 0x0F) + (rhs & 0x0F);
 
             let zero = result == 0;
             let negative = false;
@@ -187,18 +205,17 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::AddI8(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::AddI8(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
 
-            let result = lhs_value.wrapping_add_signed(rhs_value.into());
-            lhs.write(console, result);
+            let rhs = rhs_reader.read(console);
+
+            let result = lhs.wrapping_add_signed(rhs.into());
+            lhs_writer.write(console, result);
 
             // Gameboy determines flags for (u16 + i8) by treating it as (u8 + u8)
-            let (_, u8_overflow) = ((lhs_value & 0x00_FF) as u8).overflowing_add(rhs_value as u8);
-            let half_result = ((lhs_value & 0x0F) as u8) + ((rhs_value & 0x0F) as u8);
+            let (_, u8_overflow) = ((lhs & 0x00_FF) as u8).overflowing_add(rhs as u8);
+            let half_result = ((lhs & 0x0F) as u8) + ((rhs & 0x0F) as u8);
 
             let zero = false;
             let negative = false;
@@ -211,16 +228,14 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Add16(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Add16(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
-            let (result, overflow) = lhs_value.overflowing_add(rhs_value);
-            lhs.write(console, result);
+            let (result, overflow) = lhs.overflowing_add(rhs);
+            lhs_writer.write(console, result);
 
-            let half_result = (lhs_value & 0x0F_FF) + (rhs_value & 0x0F_FF);
+            let half_result = (lhs & 0x0F_FF) + (rhs & 0x0F_FF);
 
             let zero = result == 0;
             let negative = false;
@@ -233,14 +248,12 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::And(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::And(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
-            let result = lhs_value & rhs_value;
-            lhs.write(console, result);
+            let result = lhs & rhs;
+            lhs_writer.write(console, result);
 
             let zero = result == 0;
             let negative = false;
@@ -253,18 +266,16 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Cp(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Cp(lhs_reader, rhs_reader) => {
+            let lhs = lhs_reader.read(console);
+            let rhs = rhs_reader.read(console);
 
-            let result = lhs_value.wrapping_sub(rhs_value);
+            let result = lhs.wrapping_sub(rhs);
 
             let zero = result == 0;
             let negative = true;
-            let half_carry = (lhs_value & 0x0F) < (rhs_value & 0x0F);
-            let carry = lhs_value < rhs_value;
+            let half_carry = (lhs & 0x0F) < (rhs & 0x0F);
+            let carry = lhs < rhs;
             console.cpu.flags = Flags {
                 zero,
                 negative,
@@ -272,16 +283,14 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Dec8(n) => {
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
-
-            let result = n_value.wrapping_sub(1);
-            n.write(console, result);
+        InstructionName::Dec8(value_reader) => {
+            let (value_writer, value) = value_reader.read_into_writer(console);
+            let result = value.wrapping_sub(1);
+            value_writer.write(console, result);
 
             let zero = result == 0;
             let negative = true;
-            let half_carry = (n_value & 0x0F) < 1;
+            let half_carry = (value & 0x0F) < 1;
             let carry = false;
             console.cpu.flags = Flags {
                 zero,
@@ -290,16 +299,15 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Dec16(n) => {
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Dec16(value_reader) => {
+            let (value_writer, value) = value_reader.read_into_writer(console);
 
-            let result = n_value.wrapping_sub(1);
-            n.write(console, result);
+            let result = value.wrapping_sub(1);
+            value_writer.write(console, result);
 
             let zero = result == 0;
             let negative = true;
-            let half_carry = (n_value & 0x0F) < 1;
+            let half_carry = (value & 0x0F) < 1;
             let carry = false;
             console.cpu.flags = Flags {
                 zero,
@@ -308,14 +316,13 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Inc8(n) => {
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Inc8(value_reader) => {
+            let (value_writer, value) = value_reader.read_into_writer(console);
 
-            let result = n_value.wrapping_add(1);
-            n.write(console, result);
+            let result = value.wrapping_add(1);
+            value_writer.write(console, result);
 
-            let half_result = (n_value & 0x0F) + 1;
+            let half_result = (value & 0x0F) + 1;
 
             let zero = result == 0;
             let negative = false;
@@ -328,14 +335,13 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Inc16(n) => {
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Inc16(value_reader) => {
+            let (value_writer, value) = value_reader.read_into_writer(console);
 
-            let result = n_value.wrapping_add(1);
-            n.write(console, result);
+            let result = value.wrapping_add(1);
+            value_writer.write(console, result);
 
-            let half_result = (n_value & 0x0F) + 1;
+            let half_result = (value & 0x0F) + 1;
 
             let zero = result == 0;
             let negative = false;
@@ -348,14 +354,12 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Or(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Or(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
-            let result = lhs_value & rhs_value;
-            lhs.write(console, result);
+            let result = lhs & rhs;
+            lhs_writer.write(console, result);
 
             let zero = result == 0;
             let negative = false;
@@ -368,20 +372,18 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Sbc(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Sbc(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
             let old_carry = if console.cpu.flags.carry { 1 } else { 0 };
-            let result = lhs_value.wrapping_sub(rhs_value).wrapping_sub(old_carry);
-            lhs.write(console, result);
+            let result = lhs.wrapping_sub(rhs).wrapping_sub(old_carry);
+            lhs_writer.write(console, result);
 
             let zero = result == 0;
             let negative = true;
-            let half_carry = (lhs_value & 0x0F) < (rhs_value & 0x0F) + old_carry;
-            let carry = lhs_value < rhs_value + old_carry;
+            let half_carry = (lhs & 0x0F) < (rhs & 0x0F) + old_carry;
+            let carry = lhs < rhs + old_carry;
             console.cpu.flags = Flags {
                 zero,
                 negative,
@@ -389,19 +391,17 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Sub(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Sub(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
-            let result = lhs_value.wrapping_sub(rhs_value);
-            lhs.write(console, result);
+            let result = lhs.wrapping_sub(rhs);
+            lhs_writer.write(console, result);
 
             let zero = result == 0;
             let negative = true;
-            let half_carry = (lhs_value & 0x0F) < (rhs_value & 0x0F);
-            let carry = lhs_value < rhs_value;
+            let half_carry = (lhs & 0x0F) < (rhs & 0x0F);
+            let carry = lhs < rhs;
             console.cpu.flags = Flags {
                 zero,
                 negative,
@@ -409,14 +409,12 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Xor(lhs, rhs) => {
-            let (lhs_value, pc_offset) = lhs.read(console);
-            add_offset(console, pc_offset);
-            let (rhs_value, pc_offset) = rhs.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Xor(lhs_reader, rhs_reader) => {
+            let (lhs_writer, lhs) = lhs_reader.read_into_writer(console);
+            let rhs = rhs_reader.read(console);
 
-            let result = lhs_value ^ rhs_value;
-            lhs.write(console, result);
+            let result = lhs ^ rhs;
+            lhs_writer.write(console, result);
 
             let zero = result == 0;
             let negative = true;
@@ -429,14 +427,12 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Bit(bit_idx, n) => {
-            let (bit_idx_value, pc_offset) = bit_idx.read(console);
-            add_offset(console, pc_offset);
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+        InstructionName::Bit(bit_idx_reader, value_reader) => {
+            let bit_idx = bit_idx_reader.read(console);
+            let value = value_reader.read(console);
 
-            let bit_mask = 1 << bit_idx_value;
-            let bit_set = (n_value & bit_mask) != 0;
+            let bit_mask = 1 << bit_idx;
+            let bit_set = (value & bit_mask) != 0;
 
             let zero = !bit_set;
             let negative = false;
@@ -449,72 +445,303 @@ pub fn step(instructions: &Vec<Instruction>, console: &mut Console) {
                 carry,
             }
         }
-        InstructionName::Res(bit_idx, n) => {
+        InstructionName::Res(bit_idx_reader, value_reader) => {
             // Set bit `bit_idx` in n to 0
-            let (bit_idx_value, pc_offset) = bit_idx.read(console);
-            add_offset(console, pc_offset);
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+            let bit_idx = bit_idx_reader.read(console);
+            let (value_writer, value) = value_reader.read_into_writer(console);
 
-            let bit_mask = !(1 << bit_idx_value);
-            let result = n_value & bit_mask;
-            n.write(console, result);
+            let bit_mask = !(1 << bit_idx);
+            let result = value & bit_mask;
+            value_writer.write(console, result);
         }
-        InstructionName::Set(bit_idx, n) => {
+        InstructionName::Set(bit_idx_reader, value_reader) => {
             // Set bit `bit_idx` in n to 1
-            let (bit_idx_value, pc_offset) = bit_idx.read(console);
-            add_offset(console, pc_offset);
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+            let bit_idx = bit_idx_reader.read(console);
 
-            let bit_mask = 1 << bit_idx_value;
-            let result = n_value | bit_mask;
-            n.write(console, result);
+            let (value_writer, value) = value_reader.read_into_writer(console);
+
+            let bit_mask = 1 << bit_idx;
+            let result = value | bit_mask;
+            value_writer.write(console, result);
         }
-        InstructionName::Swap(n) => {
+        InstructionName::Swap(value_reader) => {
             // Swap the high 4 bytes and the low 4 bytes in n
-            let (n_value, pc_offset) = n.read(console);
-            add_offset(console, pc_offset);
+            let (value_writer, value) = value_reader.read_into_writer(console);
 
-            let high_4 = (n_value & 0xF0) >> 4;
-            let low_4 = n_value & 0x0F;
+            let high_4 = (value & 0xF0) >> 4;
+            let low_4 = value & 0x0F;
             let result = (low_4 << 4) + high_4;
-            n.write(console, result);
+            value_writer.write(console, result);
         }
-        InstructionName::Rl(_) => {}
-        InstructionName::Rla => {}
-        InstructionName::Rlc(_) => {}
-        InstructionName::Rlca => {}
-        InstructionName::Rr(_) => {}
-        InstructionName::Rra => {}
-        InstructionName::Rrc(_) => {}
-        InstructionName::Rrca => {}
-        InstructionName::Sla(_) => {}
-        InstructionName::Sra(_) => {}
-        InstructionName::Srl(_) => {}
-        InstructionName::Ld8(_, _) => {}
-        InstructionName::Ld16(_, _) => {}
-        InstructionName::Ldh(_, _) => {}
-        InstructionName::Call(_) => {}
-        InstructionName::CallIf(_, _) => {}
-        InstructionName::Jp(_) => {}
-        InstructionName::JpIf(_, _) => {}
-        InstructionName::Jr(_) => {}
-        InstructionName::JrIf(_, _) => {}
-        InstructionName::Ret => {}
-        InstructionName::RetIf(_) => {}
-        InstructionName::Reti => {}
-        InstructionName::Rst(_) => {}
-        InstructionName::Pop(_) => {}
-        InstructionName::Push(_) => {}
-        InstructionName::Ccf => {}
-        InstructionName::Cpl => {}
+        InstructionName::Rl(bits_reader) => {
+            // Rotate bits left through carry
+            let (bits_writer, bits) = bits_reader.read_into_writer(console);
+
+            let old_carry = if console.cpu.flags.carry { 1 } else { 0 };
+            let bit_7 = bits >> 7;
+            let result = (bits << 1) | old_carry;
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_7 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Rlc(bits_reader) => {
+            // Rotate bits left circularly
+            let (bits_writer, bits) = bits_reader.read_into_writer(console);
+
+            let bit_7 = bits >> 7;
+            let result = (bits << 1) | bit_7;
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_7 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Rr(bits_reader) => {
+            // Rotate bits right through carry
+            let (bits_writer, bits) = bits_reader.read_into_writer(console);
+
+            let old_carry = if console.cpu.flags.carry { 1 } else { 0 };
+            let bit_0 = bits & 1;
+            let result = (old_carry << 7) | (bits >> 1);
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_0 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Rrc(bits_value) => {
+            // Rotate bits right circularly
+            let (bits_writer, bits) = bits_value.read_into_writer(console);
+
+            let bit_0 = bits & 1;
+            let result = (bit_0 << 7) | (bits >> 1);
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_0 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Sla(bits_reader) => {
+            // Shift bits left arithmetically
+            let (bits_writer, bits) = bits_reader.read_into_writer(console);
+
+            let bit_7 = bits >> 7;
+            let result = bits << 1;
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_7 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Sra(bits_reader) => {
+            // Shift bits right arithmetically
+            // Set new bit_7 to old bit_7
+            let (bits_writer, bits) = bits_reader.read_into_writer(console);
+
+            let bit_0 = bits & 1;
+            let bit_7 = bits >> 7;
+            let result = (bit_7 << 7) | (bits >> 1);
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_0 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Srl(bits_reader) => {
+            // Shift bits right logically
+            // Set new bit_7 to 0
+            let (bits_writer, bits) = bits_reader.read_into_writer(console);
+
+            let bit_0 = bits & 1;
+            let result = (bits >> 1);
+            bits_writer.write(console, result);
+
+            let zero = result == 0;
+            let negative = false;
+            let half_carry = false;
+            let carry = bit_0 != 0;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Ld8(into_destination_writer, value_reader) => {
+            let destination_writer = into_destination_writer.into_writer(console);
+            let value = value_reader.read(console);
+
+            destination_writer.write(console, value);
+        }
+        InstructionName::Ld16(into_destination_writer, value_reader) => {
+            let destination_writer = into_destination_writer.into_writer(console);
+            let value = value_reader.read(console);
+
+            destination_writer.write(console, value);
+        }
+        InstructionName::Call(address_reader) => {
+            // Push the return_address after the immediate value to the stack
+            // Set pc to the immediate value jump_address
+            let jump_address = address_reader.read(console);
+            let return_address = console.cpu.pc;
+
+            stack_push_16(console, return_address);
+            console.cpu.pc = jump_address;
+        }
+        InstructionName::CallIf(condition, address_reader) => {
+            let condition = test_condition(console, condition);
+            let address = address_reader.read(console);
+            let return_address = console.cpu.pc;
+
+            if condition {
+                stack_push_16(console, return_address);
+                console.cpu.pc = address;
+            }
+        }
+        InstructionName::Jp(address_reader) => {
+            let address = address_reader.read(console);
+            console.cpu.pc = address;
+        }
+        InstructionName::JpIf(condition, address_reader) => {
+            let condition = test_condition(console, condition);
+            let address = address_reader.read(console);
+
+            if condition {
+                console.cpu.pc = address;
+            }
+        }
+        InstructionName::Jr(address_offset_reader) => {
+            let address_offset = address_offset_reader.read(console);
+            let address = console.cpu.pc.wrapping_add_signed(address_offset.into());
+
+            console.cpu.pc = address;
+        }
+        InstructionName::JrIf(condition, address_offset_reader) => {
+            let condition = test_condition(console, condition);
+            let address_offset = address_offset_reader.read(console);
+            let address = console.cpu.pc.wrapping_add_signed(address_offset.into());
+
+            if condition {
+                console.cpu.pc = address;
+            }
+        }
+        InstructionName::Ret => {
+            let return_address = stack_pop_16(console);
+            console.cpu.pc = return_address;
+        }
+        InstructionName::RetIf(condition) => {
+            let condition = test_condition(console, condition);
+            let return_address = stack_pop_16(console);
+
+            if condition {
+                console.cpu.pc = return_address;
+            }
+        }
+        InstructionName::Reti => {
+            let return_address = stack_pop_16(console);
+            console.cpu.pc = return_address;
+            console.cpu.ime = true;
+        }
+        InstructionName::Rst(rst) => {
+            let address = rst.into_u16();
+            console.cpu.pc = address;
+        }
+        InstructionName::Pop(register) => {
+            let value = stack_pop_16(console);
+            console.cpu.set_register_16(register, value);
+        }
+        InstructionName::Push(register) => {
+            let value = console.cpu.register_16(register);
+            stack_push_16(console, value);
+        }
+        InstructionName::Ccf => {
+            // Complement carry flag
+            let zero = false;
+            let negative = false;
+            let half_carry = false;
+            let carry = !console.cpu.flags.carry;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
+        InstructionName::Cpl => {
+            // Complement accumulator
+            let value = console.cpu.register_8(Register8::A);
+            let result = !value;
+
+            console.cpu.set_register_8(Register8::A, result);
+        }
         InstructionName::Daa => {}
-        InstructionName::Di => {}
-        InstructionName::Ei => {}
+        InstructionName::Di => {
+            // Disable interrupts
+            console.cpu.ime = false;
+        }
+        InstructionName::Ei => {
+            // Enable interrupts
+            console.cpu.ime = true;
+        }
         InstructionName::Halt => {}
         InstructionName::Nop => {}
-        InstructionName::Scf => {}
+        InstructionName::Scf => {
+            // Set carry flag
+            let zero = false;
+            let negative = false;
+            let half_carry = false;
+            let carry = true;
+            console.cpu.flags = Flags {
+                zero,
+                negative,
+                half_carry,
+                carry,
+            }
+        }
         InstructionName::Stop => {}
         InstructionName::Unused => {}
     }
